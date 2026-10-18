@@ -78,15 +78,16 @@ export const OrderTimeline: React.FC<OrderTimelineProps> = ({
     { key: 'PLACED', label: 'Order Placed', desc: 'Received & logged in system' },
     { key: 'CONFIRMED', label: 'Payment Confirmed', desc: 'Payment verified & invoiced' },
     { key: 'PICKED', label: 'Items Picked', desc: 'Retrieved from warehouse racks' },
-    { key: 'PACKED', label: 'Packed & Barcoded', desc: 'Carton sealed with destination label' },
-    { key: 'SORTED', label: 'Automated Sorting', desc: 'ESP32 IR scan & robotic arm bin allocation' },
+    { key: 'PACKED', label: 'Packed & Labeled', desc: 'Carton sealed with QR label applied' },
+    { key: 'SCANNED', label: 'QR Scanned', desc: 'QR code verified on conveyor belt' },
+    { key: 'SORTED', label: 'Automated Sorting', desc: 'Robotic arm sorted to destination bin' },
     { key: 'DISPATCHED', label: 'Dispatched', desc: 'Handed to outbound transport carrier' },
     { key: 'DELIVERED', label: 'Delivered', desc: 'Successfully delivered to customer' }
   ];
 
   const stageOrder = [
     'PLACED', 'CONFIRMED', 'PICKING', 'PICKED', 'PACKING', 'PACKED',
-    'ON_CONVEYOR', 'DETECTED', 'SORTING', 'SORTED', 'DISPATCHED', 'DELIVERED'
+    'ON_CONVEYOR', 'SCANNED', 'DETECTED', 'SORTING', 'SORTED', 'DISPATCHED', 'DELIVERED'
   ];
 
   const currentIndex = stageOrder.indexOf(currentStatus);

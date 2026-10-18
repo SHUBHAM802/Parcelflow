@@ -156,7 +156,17 @@ export function simulateFault(target: 'wifi' | 'sensor' | 'robot' | 'clear') {
 }
 
 async function processNextOrder() {
-  // Find oldest order in ON_CONVEYOR status
+  // Priority 1: Check hardware command queue for SORT_TO_BIN commands (from QR scan results)
+  const queuedCmd = queryOne<{ id: string; parcel_id: string; bin_id: string; payload_json: string }>(
+    "SELECT id, parcel_id, bin_id, payload_json FROM hardware_commands WHERE type = 'SORT_TO_BIN' AND status = 'QUEUED' ORDER BY created_at ASC LIMIT 1"
+  );
+
+  if (queuedCmd) {
+    await processQueuedCommand(queuedCmd);
+    return;
+  }
+
+  // Priority 2: Legacy — find oldest order in ON_CONVEYOR status (non-scanned parcels)
   const order = queryOne<{ id: string; destination_city: string }>(
     "SELECT id, destination_city FROM orders WHERE status = 'ON_CONVEYOR' ORDER BY updated_at ASC LIMIT 1"
   );
@@ -251,6 +261,121 @@ async function processNextOrder() {
   // Brief delay before DISPATCHED
   await sleep(2500);
   updateOrderStatus(orderId, 'DISPATCHED', `Dispatched from Fulfillment Hub Bay 4 to ${city}`);
+
+  machineState.activeOrderId = null;
+  machineState.activeOrderCity = null;
+  machineState.activeOrderBin = null;
+  ioInstance?.emit('machine:status', machineState);
+  isProcessingOrder = false;
+}
+
+/**
+ * Process a QUEUED hardware command from the scan pipeline.
+ * This simulates the physical sequence: IR detect → arm pick → sort → complete.
+ */
+async function processQueuedCommand(cmd: { id: string; parcel_id: string; bin_id: string; payload_json: string }) {
+  isProcessingOrder = true;
+  const now = () => new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+  // Mark command as SENT
+  run("UPDATE hardware_commands SET status = 'SENT', attempts = attempts + 1, updated_at = ? WHERE id = ?", [now(), cmd.id]);
+
+  // Get parcel and order info
+  const parcel = queryOne<{ order_id: string }>("SELECT order_id FROM parcels WHERE id = ?", [cmd.parcel_id]);
+  if (!parcel) {
+    run("UPDATE hardware_commands SET status = 'FAILED', failure_reason = 'Parcel not found', updated_at = ? WHERE id = ?", [now(), cmd.id]);
+    isProcessingOrder = false;
+    return;
+  }
+
+  const order = queryOne<{ destination_city: string }>("SELECT destination_city FROM orders WHERE id = ?", [parcel.order_id]);
+  const bin = queryOne<{ bin_number: number; label: string }>("SELECT bin_number, label FROM bins WHERE id = ?", [cmd.bin_id]);
+  const binLabel = bin?.label || 'BIN ?';
+  const city = order?.destination_city || 'Unknown';
+
+  machineState.activeOrderId = parcel.order_id;
+  machineState.activeOrderCity = city;
+  machineState.activeOrderBin = binLabel;
+  ioInstance?.emit('machine:status', machineState);
+
+  // Mark command as ACKED (ESP32 acknowledged)
+  run("UPDATE hardware_commands SET status = 'ACKED', updated_at = ? WHERE id = ?", [now(), cmd.id]);
+  ioInstance?.emit('hardware:command_acked', { commandId: cmd.id, parcelId: cmd.parcel_id });
+
+  // Step 1: IR sensor triggers — parcel at pick point
+  await sleep(1500);
+  machineState.sensor = 'ACTIVE';
+  ioInstance?.emit('sensor:triggered', { orderId: parcel.order_id, parcelId: cmd.parcel_id });
+  ioInstance?.emit('machine:status', machineState);
+
+  // Update parcel to AT_PICK_POINT
+  run("UPDATE parcels SET status = 'AT_PICK_POINT', at_pick_point_at = ?, updated_at = ? WHERE id = ?", [now(), now(), cmd.parcel_id]);
+  ioInstance?.emit('parcel:at_pick_point', { parcelId: cmd.parcel_id, orderId: parcel.order_id });
+
+  // Step 2: Robot arm sorting sequence
+  updateOrderStatus(parcel.order_id, 'SORTING', `Robot arm sorting to ${binLabel}`);
+  machineState.sensor = 'IDLE';
+
+  // Robot: PICKING
+  machineState.robot = 'BUSY';
+  ioInstance?.emit('robot:action', { orderId: parcel.order_id, parcelId: cmd.parcel_id, action: 'PICKING' });
+  ioInstance?.emit('machine:status', machineState);
+  run("UPDATE parcels SET status = 'SORTING', updated_at = ? WHERE id = ?", [now(), cmd.parcel_id]);
+  await sleep(1000);
+
+  // Robot: MOVING to bin
+  ioInstance?.emit('robot:action', { orderId: parcel.order_id, parcelId: cmd.parcel_id, action: 'MOVING', targetBin: binLabel });
+  await sleep(1000);
+
+  // Robot: PLACING in bin
+  ioInstance?.emit('robot:action', { orderId: parcel.order_id, parcelId: cmd.parcel_id, action: 'PLACING', targetBin: binLabel });
+  await sleep(900);
+
+  // Check for fault
+  if ((machineState.robot as any) === 'FAULT') {
+    run("UPDATE hardware_commands SET status = 'FAILED', failure_reason = 'Robot arm fault during sort', completed_at = ?, updated_at = ? WHERE id = ?", [now(), now(), cmd.id]);
+    run("UPDATE parcels SET status = 'FAILED', updated_at = ? WHERE id = ?", [now(), cmd.parcel_id]);
+
+    const faultId = `fault-${Date.now()}`;
+    run("INSERT INTO pipeline_faults (id, type, parcel_id, detail, created_at) VALUES (?, 'ARM_FAULT', ?, 'Robot arm fault during sorting', ?)", [faultId, cmd.parcel_id, now()]);
+    ioInstance?.emit('fault:created', { id: faultId, type: 'ARM_FAULT', parcelId: cmd.parcel_id });
+
+    isProcessingOrder = false;
+    machineState.activeOrderId = null;
+    ioInstance?.emit('machine:status', machineState);
+    return;
+  }
+
+  // Robot: DONE
+  ioInstance?.emit('robot:action', { orderId: parcel.order_id, parcelId: cmd.parcel_id, action: 'DONE', targetBin: binLabel });
+  machineState.robot = 'READY';
+
+  // Sort completed
+  const durationMs = 1350 + Math.floor(Math.random() * 200);
+
+  // Update parcel to SORTED
+  run("UPDATE parcels SET status = 'SORTED', sorted_at = ?, updated_at = ? WHERE id = ?", [now(), now(), cmd.parcel_id]);
+
+  // Update bin count
+  run("UPDATE bins SET parcel_count = parcel_count + 1, updated_at = ? WHERE id = ?", [now(), cmd.bin_id]);
+
+  // Log the sort
+  run(`INSERT INTO sorting_logs (id, order_id, detected_at, destination_city, assigned_bin, sort_result, duration_ms)
+    VALUES (?, ?, ?, ?, ?, 'SUCCESS', ?)`,
+    [`sort-${cmd.parcel_id}-${Date.now()}`, parcel.order_id, now(), city, binLabel, durationMs]);
+
+  run(`UPDATE orders SET assigned_bin = ? WHERE id = ?`, [binLabel, parcel.order_id]);
+
+  // Mark command DONE
+  run("UPDATE hardware_commands SET status = 'DONE', completed_at = ?, updated_at = ? WHERE id = ?", [now(), now(), cmd.id]);
+
+  updateOrderStatus(parcel.order_id, 'SORTED', `Sorted into ${binLabel} (${city})`);
+  ioInstance?.emit('sorting:completed', { orderId: parcel.order_id, parcelId: cmd.parcel_id, bin: binLabel, result: 'SUCCESS', durationMs });
+  ioInstance?.emit('hardware:command_done', { commandId: cmd.id, parcelId: cmd.parcel_id, binLabel });
+
+  // Delay then dispatch
+  await sleep(2500);
+  updateOrderStatus(parcel.order_id, 'DISPATCHED', `Dispatched from Bay 1 to ${city}`);
 
   machineState.activeOrderId = null;
   machineState.activeOrderCity = null;
