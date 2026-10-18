@@ -55,8 +55,17 @@ function doSave() {
       }
     }
 
-    // Atomic rename: .tmp -> main
-    fs.renameSync(tmpFile, DB_FILE);
+    // Atomic rename: .tmp -> main with Windows EPERM fallback
+    try {
+      fs.renameSync(tmpFile, DB_FILE);
+    } catch (renameErr: any) {
+      if ((process.platform === 'win32' || renameErr.code === 'EPERM') && fs.existsSync(tmpFile)) {
+        fs.copyFileSync(tmpFile, DB_FILE);
+        try { fs.unlinkSync(tmpFile); } catch {}
+      } else if (!fs.existsSync(DB_FILE)) {
+        throw renameErr;
+      }
+    }
   } catch (e) {
     console.error('[ParcelFlow] Failed to persist database to disk:', e);
   }

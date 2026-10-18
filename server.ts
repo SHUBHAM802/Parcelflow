@@ -15,6 +15,7 @@ import {
   emergencyStop,
   simulateFault
 } from './src/server/hardware-simulator';
+import { checkDeviceWatchdog } from './src/server/services/hardwareService';
 
 // ── Load and validate config FIRST (exits on failure) ───
 const config = loadConfig();
@@ -52,6 +53,11 @@ async function startServer() {
 
   // Initialize hardware simulation engine
   initHardwareSimulator(io);
+
+  // Periodic device watchdog check (every 2.5 seconds)
+  setInterval(() => {
+    checkDeviceWatchdog(io);
+  }, 2500);
 
   // Client socket handlers
   io.on('connection', (socket) => {

@@ -9,6 +9,7 @@ import { OperatorDashboard } from './pages/OperatorDashboard';
 import { OperatorOrdersQueue } from './pages/OperatorOrdersQueue';
 import { OperatorPicking } from './pages/OperatorPicking';
 import { OperatorPacking } from './pages/OperatorPacking';
+import { OperatorLabels } from './pages/OperatorLabels';
 import { OperatorConveyor } from './pages/OperatorConveyor';
 import { OperatorInventory } from './pages/OperatorInventory';
 import { OperatorAlerts } from './pages/OperatorAlerts';
@@ -193,6 +194,10 @@ export const OperatorPortal: React.FC = () => {
                 setActiveTab('conveyor');
               }}
             />
+          )}
+
+          {activeTab === 'labels' && (
+            <OperatorLabels />
           )}
 
           {activeTab === 'conveyor' && (

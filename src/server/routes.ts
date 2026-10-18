@@ -15,10 +15,24 @@ import {
   generateToken,
   extractUserFromRequest,
   loginRateLimiter,
+  requireDeviceToken,
   AuthenticatedRequest
 } from './auth';
 import { transitionOrderStatus, isValidTransition } from './orderStateMachine';
 import { getConfig, isGoogleLoginAvailable } from './config';
+import {
+  recordHeartbeat,
+  handleIrEvent,
+  getDesiredConveyorState,
+  setDesiredConveyor,
+  getNextCommandForDevice,
+  acknowledgeCommand,
+  completeCommand,
+  failCommand,
+  triggerEmergencyStop,
+  resetEmergencyStop,
+  getPipelineSnapshot
+} from './services/hardwareService';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Server as SocketIOServer } from 'socket.io';
 
@@ -161,16 +175,16 @@ export function createApiRouter(io: SocketIOServer) {
   router.post('/auth/google', loginRateLimiter(10, 60 * 1000), async (req: Request, res: Response) => {
     const cfg = getConfig();
 
-    // Gate: if Firebase is not configured, reject
-    if (!isGoogleLoginAvailable()) {
-      return res.status(503).json({ error: 'google_login_unavailable' });
-    }
-
     const { idToken } = req.body;
 
     // idToken is REQUIRED — never trust body fields like email/uid
     if (!idToken || typeof idToken !== 'string') {
       return res.status(400).json({ error: 'Firebase ID token is required for Google authentication' });
+    }
+
+    // Gate: if Firebase is not configured, reject
+    if (!isGoogleLoginAvailable()) {
+      return res.status(503).json({ error: 'google_login_unavailable' });
     }
 
     try {
@@ -1525,7 +1539,7 @@ export function createApiRouter(io: SocketIOServer) {
   // ==========================================
   // SCAN ENDPOINT
   // ==========================================
-  router.post('/warehouse/scan', requireStaff, (req: AuthenticatedRequest, res: Response) => {
+  router.post(['/warehouse/scan', '/operator/scan', '/api/operator/scan'], requireStaff, (req: AuthenticatedRequest, res: Response) => {
     const { payload, source, decodeMs, deviceId } = req.body;
     if (!payload) return res.status(400).json({ error: 'payload is required' });
 
@@ -1558,7 +1572,7 @@ export function createApiRouter(io: SocketIOServer) {
   // ==========================================
   // BINS (category-based routing)
   // ==========================================
-  router.get('/warehouse/bins-config', requireStaff, (_req: Request, res: Response) => {
+  router.get(['/warehouse/bins-config', '/admin/bins', '/api/admin/bins'], requireStaff, (_req: Request, res: Response) => {
     const bins = query(`
       SELECT b.*, c.name as category_name, c.slug as category_slug
       FROM bins b
@@ -1568,7 +1582,7 @@ export function createApiRouter(io: SocketIOServer) {
     return res.json(bins);
   });
 
-  router.put('/warehouse/bins-config/:binId', requireStaff, (req: Request, res: Response) => {
+  router.put(['/warehouse/bins-config/:binId', '/admin/bins/:binId', '/api/admin/bins/:binId'], requireStaff, (req: Request, res: Response) => {
     const { binId } = req.params;
     const { label, category_id, servo_preset_json, is_active } = req.body;
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -1581,8 +1595,141 @@ export function createApiRouter(io: SocketIOServer) {
     return res.json({ success: true });
   });
 
+  router.post('/admin/bins/:binId/test-move', requireAdmin, (req: Request, res: Response) => {
+    const { binId } = req.params;
+    const bin = queryOne<{ id: string; bin_number: number; label: string; servo_preset_json: string }>(
+      "SELECT * FROM bins WHERE id = ?", [binId]
+    );
+    if (!bin) return res.status(404).json({ error: 'Bin not found' });
+
+    // Check pipeline idle
+    const inFlight = queryOne<{ id: string }>(
+      "SELECT id FROM parcels WHERE status IN ('SCANNED', 'AT_PICK_POINT', 'SORTING') LIMIT 1"
+    );
+    if (inFlight) {
+      return res.status(409).json({ error: 'Cannot run test move while a parcel is in flight' });
+    }
+
+    const cmdId = `test-move-${Date.now()}`;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    run(
+      `INSERT INTO hardware_commands (id, device_id, type, bin_id, payload_json, status, idempotency_key, created_at, updated_at)
+       VALUES (?, 'arm-esp32', 'MOVE_TO_BIN', ?, ?, 'RELEASED', ?, ?, ?)`,
+      [cmdId, bin.id, bin.servo_preset_json, `test-${cmdId}`, now, now]
+    );
+
+    return res.json({ success: true, commandId: cmdId, binNumber: bin.bin_number, label: bin.label });
+  });
+
   // ==========================================
-  // HARDWARE COMMAND QUEUE
+  // OPERATOR PIPELINE & TELEMETRY
+  // ==========================================
+  router.get(['/operator/pipeline/state', '/warehouse/pipeline/state', '/warehouse/pipeline-snapshot'], requireStaff, (_req: Request, res: Response) => {
+    const snapshot = getPipelineSnapshot();
+    return res.json(snapshot);
+  });
+
+  router.post(['/operator/estop', '/warehouse/estop'], requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const result = triggerEmergencyStop(req.user?.id, io);
+    return res.json(result);
+  });
+
+  router.post(['/operator/estop/reset', '/warehouse/estop/reset'], requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { confirm } = req.body;
+    if (!confirm) {
+      return res.status(400).json({ error: 'Explicit confirmation required to reset Emergency Stop' });
+    }
+    const result = resetEmergencyStop(req.user?.id, io);
+    return res.json(result);
+  });
+
+  router.post(['/operator/conveyor/control', '/warehouse/conveyor/control'], requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { action } = req.body;
+    if (action === 'EMERGENCY_STOP') {
+      const result = triggerEmergencyStop(req.user?.id, io);
+      return res.json({ conveyor: 'EMERGENCY_STOPPED', ...result });
+    }
+    if (action === 'START' || action === 'RESUME') {
+      setDesiredConveyor('RUN', 'Operator command START', io);
+      startConveyor();
+      return res.json(getMachineState());
+    }
+    if (action === 'STOP') {
+      setDesiredConveyor('STOP', 'Operator command STOP', io);
+      stopConveyor();
+      return res.json(getMachineState());
+    }
+    if (action === 'PAUSE' || action === 'HOLD') {
+      setDesiredConveyor('HOLD', 'Operator command PAUSE', io);
+      pauseConveyor();
+      return res.json(getMachineState());
+    }
+    return res.status(400).json({ error: `Unknown action ${action}` });
+  });
+
+  router.post(['/operator/labels/batch', '/warehouse/labels/batch'], requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { orderIds } = req.body;
+    if (!Array.isArray(orderIds) || orderIds.length === 0) {
+      return res.status(400).json({ error: 'orderIds array is required' });
+    }
+    if (orderIds.length > 12) {
+      return res.status(400).json({ error: 'Batch size limited to 12 labels' });
+    }
+    const { createOrGetLabel } = require('./services/labelService');
+    const results = [];
+    for (const oid of orderIds) {
+      try {
+        const lbl = createOrGetLabel(oid);
+        results.push({ orderId: oid, ...lbl });
+      } catch (err: any) {
+        results.push({ orderId: oid, error: err.message });
+      }
+    }
+    return res.json({ labels: results });
+  });
+
+  router.post(['/operator/demo-order', '/warehouse/demo-order'], requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const product = queryOne<{ id: string; name: string; price: number; category_id: string }>(
+      "SELECT id, name, price, category_id FROM products ORDER BY RANDOM() LIMIT 1"
+    );
+    if (!product) return res.status(500).json({ error: 'No products in database' });
+
+    const orderId = `ORD-DEMO-${Date.now().toString().slice(-6)}`;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    const customer = queryOne<{ id: string }>("SELECT id FROM users WHERE role = 'customer' LIMIT 1");
+    const customerId = customer?.id || 'usr-cust-demo';
+
+    transaction(() => {
+      run(`
+        INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, is_demo, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, 'PACKED', 'PAID', 'Mumbai', 1, ?, ?)
+      `, [orderId, customerId, product.price, Math.round(product.price * 0.82), Math.round(product.price * 0.18), now, now]);
+
+      run(`
+        INSERT INTO order_items (id, order_id, product_id, quantity, unit_price)
+        VALUES (?, ?, ?, 1, ?)
+      `, [`item-${orderId}`, orderId, product.id, product.price]);
+
+      run(`
+        INSERT INTO order_status_history (id, order_id, status, note, changed_by, changed_at)
+        VALUES (?, ?, 'PACKED', 'Demo order created in PACKED state', ?, ?)
+      `, [`hist-${Date.now()}`, orderId, req.user?.id || 'operator', now]);
+    });
+
+    const { createOrGetLabel } = require('./services/labelService');
+    const labelData = createOrGetLabel(orderId);
+
+    return res.json({
+      success: true,
+      orderId,
+      parcel: labelData.parcel,
+      labelPayload: labelData.labelPayload,
+      bin: labelData.bin
+    });
+  });
+
+  // ==========================================
+  // HARDWARE COMMAND QUEUE & FAULTS
   // ==========================================
   router.get('/warehouse/hardware/commands', requireStaff, (_req: Request, res: Response) => {
     const cmds = query(`
@@ -1611,7 +1758,62 @@ export function createApiRouter(io: SocketIOServer) {
     const { id } = req.params;
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
     run("UPDATE pipeline_faults SET acked_at = ?, acked_by = ? WHERE id = ?", [now, req.user?.id || null, id]);
+    if (io) io.emit('fault:acked', { id, ackedBy: req.user?.name || 'Operator', ackedAt: now });
     return res.json({ success: true });
+  });
+
+  // ==========================================
+  // HARDWARE API (ESP32 Integration)
+  // Protected with requireDeviceToken
+  // ==========================================
+  router.post(['/hardware/heartbeat', '/api/hardware/heartbeat'], requireDeviceToken, (req: Request, res: Response) => {
+    const { deviceId, firmware, rssi, state } = req.body;
+    if (!deviceId) return res.status(400).json({ error: 'deviceId is required' });
+    const result = recordHeartbeat({ deviceId, firmware, rssi, state }, io);
+    return res.json(result);
+  });
+
+  router.post(['/hardware/ir-event', '/api/hardware/ir-event'], requireDeviceToken, (req: Request, res: Response) => {
+    const { deviceId, sensorId, state, seq, ts } = req.body;
+    if (!deviceId || !sensorId || !state || seq === undefined) {
+      return res.status(400).json({ error: 'deviceId, sensorId, state, seq are required' });
+    }
+    const result = handleIrEvent({ deviceId, sensorId, state, seq, ts }, io);
+    return res.json(result);
+  });
+
+  router.get(['/hardware/conveyor/desired', '/api/hardware/conveyor/desired'], requireDeviceToken, (_req: Request, res: Response) => {
+    const state = getDesiredConveyorState();
+    return res.json(state);
+  });
+
+  router.get(['/hardware/commands/next', '/api/hardware/commands/next'], requireDeviceToken, (req: Request, res: Response) => {
+    const deviceId = (req.query.deviceId as string) || 'arm-esp32';
+    const nextCmd = getNextCommandForDevice(deviceId);
+    if (!nextCmd) {
+      return res.status(204).end();
+    }
+    return res.json(nextCmd);
+  });
+
+  router.post(['/hardware/commands/:id/ack', '/api/hardware/commands/:id/ack'], requireDeviceToken, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const result = acknowledgeCommand(id, io);
+    return res.json(result);
+  });
+
+  router.post(['/hardware/commands/:id/complete', '/api/hardware/commands/:id/complete'], requireDeviceToken, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { durationMs } = req.body;
+    const result = completeCommand(id, durationMs ? Number(durationMs) : 2000, io);
+    return res.json(result);
+  });
+
+  router.post(['/hardware/commands/:id/fail', '/api/hardware/commands/:id/fail'], requireDeviceToken, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { reason } = req.body;
+    const result = failCommand(id, reason || 'Unknown device fault', io);
+    return res.json(result);
   });
 
   // ==========================================
@@ -1717,7 +1919,7 @@ export function createApiRouter(io: SocketIOServer) {
     const totals = queryOne<{ totalOrders: number; totalRevenue: number }>(`
       SELECT COUNT(*) as totalOrders, COALESCE(SUM(total_amount), 0) as totalRevenue
       FROM orders
-      WHERE status != 'CANCELLED'
+      WHERE status != 'CANCELLED' AND (is_demo IS NULL OR is_demo = 0)
     `);
 
     const customersCount = queryOne<{ cnt: number }>("SELECT COUNT(*) as cnt FROM users WHERE role = 'customer'");
@@ -1727,13 +1929,13 @@ export function createApiRouter(io: SocketIOServer) {
     const lowStockRow = queryOne<{ cnt: number }>("SELECT COUNT(*) as cnt FROM inventory WHERE stock_quantity <= low_stock_threshold");
     const lowStockCount = lowStockRow?.cnt || 0;
 
-    // Real revenue by day
+    // Real revenue by day (excludes demo orders)
     const revenueByDay = query<{ date: string; revenue: number; orders: number }>(`
       SELECT substr(created_at, 1, 10) as date,
              ROUND(SUM(total_amount), 0) as revenue,
              COUNT(*) as orders
       FROM orders
-      WHERE status != 'CANCELLED'
+      WHERE status != 'CANCELLED' AND (is_demo IS NULL OR is_demo = 0)
       GROUP BY substr(created_at, 1, 10)
       ORDER BY date ASC
       LIMIT 20
@@ -1750,7 +1952,7 @@ export function createApiRouter(io: SocketIOServer) {
       JOIN products p ON oi.product_id = p.id
       JOIN orders o ON oi.order_id = o.id
       LEFT JOIN inventory inv ON p.id = inv.product_id
-      WHERE o.status != 'CANCELLED'
+      WHERE o.status != 'CANCELLED' AND (o.is_demo IS NULL OR o.is_demo = 0)
       GROUP BY p.id
       ORDER BY units_sold DESC
       LIMIT 5
@@ -1766,6 +1968,34 @@ export function createApiRouter(io: SocketIOServer) {
     const totalSorts = sortingStats?.total || 0;
     const sortSuccessRate = totalSorts > 0 ? Math.round(((sortingStats?.success || 0) / totalSorts) * 100) : 100;
     const avgSortTimeMs = Math.round(sortingStats?.avgDuration || 1420);
+
+    // Optical pipeline scan analytics
+    const scanAgg = queryOne<{ total: number; accepted: number }>(`
+      SELECT COUNT(*) as total,
+             SUM(CASE WHEN result = 'ACCEPTED' THEN 1 ELSE 0 END) as accepted
+      FROM scan_events
+    `);
+    const totalScans = scanAgg?.total || 0;
+    const scanSuccessRate = totalScans > 0 ? Math.round(((scanAgg?.accepted || 0) / totalScans) * 100) : 100;
+
+    const rejectsByReason = query<{ result: string; count: number }>(`
+      SELECT result, COUNT(*) as count
+      FROM scan_events
+      WHERE result != 'ACCEPTED'
+      GROUP BY result
+      ORDER BY count DESC
+    `);
+
+    const scanToSortedRow = queryOne<{ avgDurationSec: number }>(`
+      SELECT AVG((strftime('%s', sorted_at) - strftime('%s', scanned_at))) as avgDurationSec
+      FROM parcels
+      WHERE scanned_at IS NOT NULL AND sorted_at IS NOT NULL
+    `);
+    const avgScanToSortedSec = Math.max(1, Math.round(scanToSortedRow?.avgDurationSec || 5));
+
+    const binsStats = query<{ label: string; parcel_count: number }>(`
+      SELECT label, parcel_count FROM bins ORDER BY bin_number ASC
+    `);
 
     const destStats = query<{ city: string; bin: string; count: number; servoAngle: string }>(`
       SELECT d.city, d.bin_label as bin, COUNT(o.id) as count, '45°' as servoAngle
@@ -1826,6 +2056,13 @@ export function createApiRouter(io: SocketIOServer) {
         avgSortTimeMs,
         machineUptime: '99.8%'
       },
+      pipelineAnalytics: {
+        totalScans,
+        scanSuccessRate,
+        rejectsByReason,
+        avgScanToSortedSec,
+        binsStats
+      },
       destinationDistribution: destStats,
       hourlyThroughput
     });
@@ -1845,7 +2082,7 @@ export function createApiRouter(io: SocketIOServer) {
              ROUND(SUM(gst_amount), 2) as gst,
              COUNT(*) as orders_count
       FROM orders
-      WHERE status != 'CANCELLED'
+      WHERE status != 'CANCELLED' AND (is_demo IS NULL OR is_demo = 0)
       GROUP BY substr(created_at, 1, 10)
       ORDER BY date DESC
       LIMIT 30
@@ -1855,7 +2092,7 @@ export function createApiRouter(io: SocketIOServer) {
              ROUND(SUM(gst_amount), 2) as totalGst,
              COUNT(*) as totalOrders
       FROM orders
-      WHERE status != 'CANCELLED'
+      WHERE status != 'CANCELLED' AND (is_demo IS NULL OR is_demo = 0)
     `);
     return res.json({ totals, revenueByDay });
   });
