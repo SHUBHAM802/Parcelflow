@@ -10,6 +10,7 @@ export type OrderStatus =
   | 'PACKED'
   | 'ON_CONVEYOR'
   | 'CONVEYOR_QUEUED'
+  | 'SCANNED'
   | 'DETECTED'
   | 'SORTING'
   | 'SORTED'
@@ -26,7 +27,8 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   PACKING: ['PACKED', 'CANCELLED'],
   PACKED: ['ON_CONVEYOR', 'CONVEYOR_QUEUED'],
   CONVEYOR_QUEUED: ['ON_CONVEYOR', 'DETECTED'],
-  ON_CONVEYOR: ['DETECTED', 'CANCELLED'],
+  ON_CONVEYOR: ['SCANNED', 'DETECTED', 'CANCELLED'],
+  SCANNED: ['DETECTED', 'CANCELLED'],
   DETECTED: ['SORTING', 'CANCELLED'],
   SORTING: ['SORTED', 'CANCELLED', 'CONFIRMED'],
   SORTED: ['DISPATCHED'],
@@ -48,7 +50,8 @@ export function transitionOrderStatus(
   newStatus: string,
   note: string,
   io?: SocketIOServer | null,
-  isAdmin = false
+  isAdmin = false,
+  changedBy?: string
 ): { success: boolean; error?: string; oldStatus?: string } {
   const current = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
   if (!current) {
@@ -69,8 +72,8 @@ export function transitionOrderStatus(
 
   const histId = `hist-${orderId}-${Date.now()}`;
   run(
-    "INSERT INTO order_status_history (id, order_id, status, note, changed_at) VALUES (?, ?, ?, ?, ?)",
-    [histId, orderId, newStatus, note || `Transitioned to ${newStatus}`, now]
+    "INSERT INTO order_status_history (id, order_id, status, note, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [histId, orderId, newStatus, note || `Transitioned to ${newStatus}`, changedBy || null, now]
   );
 
   if (io) {

@@ -18,7 +18,14 @@ import {
   AuthenticatedRequest
 } from './auth';
 import { transitionOrderStatus, isValidTransition } from './orderStateMachine';
+import { getConfig, isGoogleLoginAvailable } from './config';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Server as SocketIOServer } from 'socket.io';
+
+// Google's public JWKS endpoint for Firebase ID token verification
+const GOOGLE_JWKS = createRemoteJWKSet(
+  new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
+);
 
 export function createApiRouter(io: SocketIOServer) {
   const router = Router();
@@ -92,12 +99,12 @@ export function createApiRouter(io: SocketIOServer) {
     }
 
     const isValid = verifyPassword(password, user.password_hash);
-    if (!isValid) {
+    if (!isValid.valid) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
 
-    // If password was verified using legacy format, upgrade stored hash
-    if (!user.password_hash.includes(':')) {
+    // Transparently re-hash with stronger iterations if needed
+    if (isValid.needsRehash) {
       const newHash = hashPassword(password);
       run('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);
     }
@@ -150,119 +157,125 @@ export function createApiRouter(io: SocketIOServer) {
     });
   });
 
-  // Google Authentication via Firebase
-  router.post('/auth/google', loginRateLimiter(10, 60 * 1000), (req: Request, res: Response) => {
-    const { uid, email, name, photoUrl, idToken } = req.body;
+  // Google Authentication via Firebase — SECURE token verification
+  router.post('/auth/google', loginRateLimiter(10, 60 * 1000), async (req: Request, res: Response) => {
+    const cfg = getConfig();
 
-    if (!uid || !email) {
-      return res.status(400).json({ error: 'Firebase UID and email are required for Google authentication' });
+    // Gate: if Firebase is not configured, reject
+    if (!isGoogleLoginAvailable()) {
+      return res.status(503).json({ error: 'google_login_unavailable' });
     }
 
-    const cleanEmail = String(email).trim().toLowerCase();
-    const cleanUid = String(uid).trim();
-    const cleanName = (typeof name === 'string' && name.trim()) ? name.trim() : cleanEmail.split('@')[0];
-    const cleanPhoto = typeof photoUrl === 'string' ? photoUrl.trim() : '';
+    const { idToken } = req.body;
 
-    // If an ID token was passed, inspect token payload to verify claims
-    if (idToken && typeof idToken === 'string' && idToken.includes('.')) {
-      try {
-        const parts = idToken.split('.');
-        if (parts.length === 3) {
-          const payloadStr = Buffer.from(parts[1], 'base64').toString('utf8');
-          const payload = JSON.parse(payloadStr);
-          if (payload.exp && payload.exp * 1000 < Date.now()) {
-            return res.status(401).json({ error: 'Firebase ID token has expired. Please sign in again.' });
-          }
-          if (payload.email && payload.email.toLowerCase() !== cleanEmail) {
-            return res.status(401).json({ error: 'Token email does not match requested email.' });
-          }
+    // idToken is REQUIRED — never trust body fields like email/uid
+    if (!idToken || typeof idToken !== 'string') {
+      return res.status(400).json({ error: 'Firebase ID token is required for Google authentication' });
+    }
+
+    try {
+      // Cryptographically verify the RS256 token against Google's published keys
+      const { payload } = await jwtVerify(idToken, GOOGLE_JWKS, {
+        issuer: `https://securetoken.google.com/${cfg.FIREBASE_PROJECT_ID}`,
+        audience: cfg.FIREBASE_PROJECT_ID!,
+      });
+
+      // Validate required claims
+      const verifiedEmail = payload.email as string | undefined;
+      const verifiedUid = payload.sub;
+      const emailVerified = payload.email_verified as boolean | undefined;
+
+      if (!verifiedEmail || !verifiedUid) {
+        return res.status(401).json({ error: 'Token missing required claims (email, sub)' });
+      }
+
+      if (emailVerified !== true) {
+        return res.status(401).json({ error: 'Email not verified by Google. Please verify your email first.' });
+      }
+
+      const cleanEmail = verifiedEmail.trim().toLowerCase();
+      const cleanUid = verifiedUid.trim();
+      const cleanName = (payload.name as string) || cleanEmail.split('@')[0];
+      const cleanPhoto = (payload.picture as string) || '';
+
+      // Check if an existing operator/admin account exists with this email — BLOCK
+      const existingUser = queryOne<{
+        id: string; role: string;
+      }>('SELECT id, role FROM users WHERE LOWER(email) = ?', [cleanEmail]);
+
+      if (existingUser && (existingUser.role === 'operator' || existingUser.role === 'admin')) {
+        return res.status(403).json({
+          error: 'Operator and admin accounts cannot use Google Sign-In. Please use email/password login.'
+        });
+      }
+
+      // 1. Look for user by firebase_uid
+      let user = queryOne<{
+        id: string; name: string; email: string; role: 'customer' | 'operator' | 'admin';
+        phone: string; avatar_url?: string; firebase_uid?: string;
+      }>('SELECT id, name, email, role, phone, avatar_url, firebase_uid FROM users WHERE firebase_uid = ?', [cleanUid]);
+
+      // 2. If not found by uid, link by email (customers only)
+      if (!user && existingUser) {
+        user = queryOne<{
+          id: string; name: string; email: string; role: 'customer' | 'operator' | 'admin';
+          phone: string; avatar_url?: string; firebase_uid?: string;
+        }>('SELECT id, name, email, role, phone, avatar_url, firebase_uid FROM users WHERE LOWER(email) = ?', [cleanEmail]);
+
+        if (user) {
+          run(
+            'UPDATE users SET firebase_uid = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?',
+            [cleanUid, cleanPhoto, user.id]
+          );
+          user.firebase_uid = cleanUid;
+          if (!user.avatar_url) user.avatar_url = cleanPhoto;
         }
-      } catch (tokenErr) {
-        console.warn('[ParcelFlow] Firebase token payload parse warning:', tokenErr);
       }
-    }
 
-    // 1. Look for user by firebase_uid first
-    let user = queryOne<{
-      id: string;
-      name: string;
-      email: string;
-      role: 'customer' | 'operator' | 'admin';
-      phone: string;
-      avatar_url?: string;
-      firebase_uid?: string;
-    }>('SELECT id, name, email, role, phone, avatar_url, firebase_uid FROM users WHERE firebase_uid = ?', [cleanUid]);
+      // 3. Create new customer account
+      if (!user) {
+        const newId = `usr-${Date.now()}`;
+        const randomPassword = crypto.randomBytes(32).toString('hex');
+        const hashedPassword = hashPassword(randomPassword);
 
-    // 2. If not found by firebase_uid, look for user by email (Account Linking)
-    if (!user) {
-      user = queryOne<{
-        id: string;
-        name: string;
-        email: string;
-        role: 'customer' | 'operator' | 'admin';
-        phone: string;
-        avatar_url?: string;
-        firebase_uid?: string;
-      }>('SELECT id, name, email, role, phone, avatar_url, firebase_uid FROM users WHERE LOWER(email) = ?', [cleanEmail]);
-
-      if (user) {
-        // Link existing account with this firebase_uid and update avatar if not set
         run(
-          'UPDATE users SET firebase_uid = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?',
-          [cleanUid, cleanPhoto, user.id]
+          `INSERT INTO users (id, name, email, password_hash, role, phone, avatar_url, firebase_uid)
+           VALUES (?, ?, ?, ?, 'customer', '', ?, ?)`,
+          [newId, cleanName, cleanEmail, hashedPassword, cleanPhoto, cleanUid]
         );
-        user.firebase_uid = cleanUid;
-        if (!user.avatar_url) user.avatar_url = cleanPhoto;
+
+        run(
+          `INSERT INTO addresses (id, customer_id, label, full_name, phone, line1, line2, city, state, pincode, is_default)
+           VALUES (?, ?, 'Home', ?, '', 'Flat 101, Green Valley', 'FC Road', 'Pune', 'Maharashtra', '411005', 1)`,
+          [`addr-${Date.now()}`, newId, cleanName]
+        );
+
+        user = {
+          id: newId, name: cleanName, email: cleanEmail, role: 'customer',
+          phone: '', avatar_url: cleanPhoto, firebase_uid: cleanUid
+        };
       }
-    }
 
-    // 3. If still no user exists, create a new Customer account (strictly 'customer' role)
-    if (!user) {
-      const newId = `usr-${Date.now()}`;
-      const randomPassword = crypto.randomBytes(32).toString('hex');
-      const hashedPassword = hashPassword(randomPassword);
-
-      run(
-        `INSERT INTO users (id, name, email, password_hash, role, phone, avatar_url, firebase_uid)
-         VALUES (?, ?, ?, ?, 'customer', '', ?, ?)`,
-        [newId, cleanName, cleanEmail, hashedPassword, cleanPhoto, cleanUid]
-      );
-
-      // Create default customer shipping address
-      run(
-        `INSERT INTO addresses (id, customer_id, label, full_name, phone, line1, line2, city, state, pincode, is_default)
-         VALUES (?, ?, 'Home', ?, '', 'Flat 101, Green Valley', 'FC Road', 'Pune', 'Maharashtra', '411005', 1)`,
-        [`addr-${Date.now()}`, newId, cleanName]
-      );
-
-      user = {
-        id: newId,
-        name: cleanName,
-        email: cleanEmail,
-        role: 'customer',
-        phone: '',
-        avatar_url: cleanPhoto,
-        firebase_uid: cleanUid
+      const safeUser = {
+        id: user.id, name: user.name, email: user.email, role: user.role,
+        phone: user.phone || '', avatar_url: user.avatar_url || cleanPhoto,
+        firebase_uid: user.firebase_uid || cleanUid
       };
+
+      const token = generateToken(safeUser);
+      return res.json({ success: true, user: safeUser, token });
+
+    } catch (err: any) {
+      console.error('[ParcelFlow] Google token verification failed:', err.message);
+      return res.status(401).json({ error: 'Invalid or expired Firebase ID token' });
     }
+  });
 
-    // Google-authenticated user session payload
-    const safeUser = {
-      id: user.id,
-      name: user.name,
-      email: user.email,
-      role: user.role,
-      phone: user.phone || '',
-      avatar_url: user.avatar_url || cleanPhoto,
-      firebase_uid: user.firebase_uid || cleanUid
-    };
-
-    const token = generateToken(safeUser);
-
-    return res.json({
-      success: true,
-      user: safeUser,
-      token
+  // Auth providers discovery (frontend uses this to show/hide Google button)
+  router.get('/auth/providers', (_req: Request, res: Response) => {
+    res.json({
+      google: isGoogleLoginAvailable(),
+      email: true
     });
   });
 

@@ -62,6 +62,28 @@ export async function seedDatabase(db: Database) {
     db.run("INSERT INTO destinations (id, city, bin_label) VALUES (?, ?, ?)", [d.id, d.city, d.bin_label]);
   }
 
+  // 3b. Bins (category-based routing for physical prototype - 4 bins)
+  const bins = [
+    { id: 'bin-1', bin_number: 1, label: 'BIN 1', category_id: 'cat-electronics', is_overflow: 0, servo_preset_json: '{"base":45,"shoulder":90,"elbow":120,"wrist":90}' },
+    { id: 'bin-2', bin_number: 2, label: 'BIN 2', category_id: 'cat-fashion', is_overflow: 0, servo_preset_json: '{"base":90,"shoulder":85,"elbow":110,"wrist":90}' },
+    { id: 'bin-3', bin_number: 3, label: 'BIN 3', category_id: 'cat-books', is_overflow: 0, servo_preset_json: '{"base":135,"shoulder":80,"elbow":105,"wrist":90}' },
+    { id: 'bin-4', bin_number: 4, label: 'BIN 4', category_id: null, is_overflow: 1, servo_preset_json: '{"base":170,"shoulder":75,"elbow":100,"wrist":90}' },
+  ];
+
+  const binSeedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  for (const b of bins) {
+    db.run(
+      "INSERT INTO bins (id, bin_number, label, category_id, is_overflow, servo_preset_json, is_active, parcel_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, 0, ?)",
+      [b.id, b.bin_number, b.label, b.category_id, b.is_overflow, b.servo_preset_json, binSeedTime]
+    );
+  }
+
+  // 3c. Pipeline initial state
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_desired', 'STOP', ?)", [binSeedTime]);
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_revision', '1', ?)", [binSeedTime]);
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_speed_pct', '100', ?)", [binSeedTime]);
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('estop_active', 'false', ?)", [binSeedTime]);
+
   // 4. Products (~40 realistic Indian-market items)
   const products = [
     // Electronics

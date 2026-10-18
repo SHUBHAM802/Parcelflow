@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../shared/store/authContext';
 import { Lock, Mail, User, Phone, ArrowRight, AlertCircle, Eye, EyeOff, ShieldAlert, KeyRound, CheckCircle } from 'lucide-react';
 import { apiFetch } from '../../shared/lib/api';
 import { auth, googleProvider, isFirebaseConfigured } from '../../shared/lib/firebase';
 import { signInWithPopup } from 'firebase/auth';
+
+const showDemoAccounts = (import.meta as any).env?.VITE_SHOW_DEMO_ACCOUNTS === 'true';
 
 export const LoginPage: React.FC = () => {
   const { login, register, loginWithGoogle, isLoading } = useAuth();
@@ -23,6 +25,14 @@ export const LoginPage: React.FC = () => {
   const [confirmNewPassword, setConfirmNewPassword] = useState('');
   const [forgotLoading, setForgotLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleAvailable, setGoogleAvailable] = useState(false);
+
+  // Check if Google login is available from backend
+  useEffect(() => {
+    apiFetch<{ google: boolean }>('/auth/providers')
+      .then(p => setGoogleAvailable(p.google))
+      .catch(() => setGoogleAvailable(false));
+  }, []);
 
   const demoAccounts = [
     {
@@ -368,7 +378,8 @@ export const LoginPage: React.FC = () => {
                 )}
               </button>
 
-              {/* Divider */}
+              {/* Divider — only when Google is available */}
+              {googleAvailable && (
               <div className="relative my-3 sm:my-4">
                 <div className="absolute inset-0 flex items-center">
                   <div className="w-full border-t border-zinc-800" />
@@ -377,8 +388,10 @@ export const LoginPage: React.FC = () => {
                   <span className="bg-zinc-950 px-3 text-zinc-500 font-semibold tracking-wider">Or continue with</span>
                 </div>
               </div>
+              )}
 
-              {/* Continue with Google Button */}
+              {/* Continue with Google Button — only when available */}
+              {googleAvailable && (
               <button
                 id="google-signin-btn"
                 type="button"
@@ -416,6 +429,7 @@ export const LoginPage: React.FC = () => {
                   </>
                 )}
               </button>
+              )}
 
               <div className="text-center pt-2">
                 <button
@@ -769,8 +783,8 @@ export const LoginPage: React.FC = () => {
           )}
         </div>
 
-        {/* Demo Accounts Quick-Test Table — Only shown on Login screen */}
-        {mode === 'login' && (
+        {/* Demo Accounts Quick-Test Table — Only shown when VITE_SHOW_DEMO_ACCOUNTS=true */}
+        {mode === 'login' && showDemoAccounts && (
           <div className="bg-zinc-950/60 border border-zinc-800/80 rounded-2xl p-4 sm:p-5 shadow-lg space-y-3">
             <div className="flex items-center justify-between">
               <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 flex items-center gap-1.5">

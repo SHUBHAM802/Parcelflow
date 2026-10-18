@@ -38,9 +38,18 @@ Thumbs.db
 
 # Test & inspect artifacts
 inspect_output.txt
+inspect.cjs
+inspect-db.cjs
 
-# Graphify local state & caches (preserves graphify-out/ graph artifacts & reports)
-graphify-out/.*
-graphify-out/cost.json
-graphify-out/manifest.json
+# Agent tooling output
+.agents/
+graphify-out/
 .graphify_cache/
+.graphifyignore
+
+# Database backups
+backups/
+
+# Firebase service accounts (NEVER commit)
+*-firebase-adminsdk-*.json
+service-account*.json
