@@ -41,6 +41,12 @@ const GOOGLE_JWKS = createRemoteJWKSet(
   new URL('https://www.googleapis.com/service_accounts/v1/jwk/securetoken@system.gserviceaccount.com')
 );
 
+let customGoogleJwksResolver: any = null;
+
+export function setGoogleJwksResolver(resolver: any) {
+  customGoogleJwksResolver = resolver;
+}
+
 export function createApiRouter(io: SocketIOServer) {
   const router = Router();
 
@@ -182,16 +188,20 @@ export function createApiRouter(io: SocketIOServer) {
       return res.status(400).json({ error: 'Firebase ID token is required for Google authentication' });
     }
 
-    // Gate: if Firebase is not configured, reject
-    if (!isGoogleLoginAvailable()) {
+    // Gate: if Firebase is not configured (and no test JWKS resolver is set), reject
+    if (!customGoogleJwksResolver && !isGoogleLoginAvailable()) {
       return res.status(503).json({ error: 'google_login_unavailable' });
     }
 
     try {
-      // Cryptographically verify the RS256 token against Google's published keys
-      const { payload } = await jwtVerify(idToken, GOOGLE_JWKS, {
-        issuer: `https://securetoken.google.com/${cfg.FIREBASE_PROJECT_ID}`,
-        audience: cfg.FIREBASE_PROJECT_ID!,
+      const jwks = customGoogleJwksResolver || GOOGLE_JWKS;
+      const expectedProjectId = customGoogleJwksResolver ? (cfg.FIREBASE_PROJECT_ID || 'test-firebase-project') : cfg.FIREBASE_PROJECT_ID!;
+
+      // Cryptographically verify the RS256 token against Google's published keys (pinned to RS256)
+      const { payload } = await jwtVerify(idToken, jwks, {
+        issuer: `https://securetoken.google.com/${expectedProjectId}`,
+        audience: expectedProjectId,
+        algorithms: ['RS256'],
       });
 
       // Validate required claims
@@ -199,8 +209,12 @@ export function createApiRouter(io: SocketIOServer) {
       const verifiedUid = payload.sub;
       const emailVerified = payload.email_verified as boolean | undefined;
 
-      if (!verifiedEmail || !verifiedUid) {
+      if (!verifiedEmail || typeof verifiedEmail !== 'string' || !verifiedUid || typeof verifiedUid !== 'string') {
         return res.status(401).json({ error: 'Token missing required claims (email, sub)' });
+      }
+
+      if (typeof payload.iat !== 'number' || isNaN(payload.iat)) {
+        return res.status(401).json({ error: 'Token missing valid iat claim' });
       }
 
       if (emailVerified !== true) {
