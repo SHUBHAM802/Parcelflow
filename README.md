@@ -104,16 +104,34 @@ ParcelFlow supports Google Sign-In via Firebase Modular SDK alongside traditiona
 
 ---
 
-## Hardware Simulation Engine
+## Physical Hardware Pipeline & Operator Sorting
 
-The built-in conveyor and sorting engine runs continuously inside `src/server/hardware-simulator`:
-1. When an operator queues an order for infeed, its status transitions to `ON_CONVEYOR`.
-2. The simulation loop processes the parcel:
-   - **IR Sensor:** Detects the parcel at station 1 (transitions order to `DETECTED`).
-   - **Camera Frame:** Emits barcode and dimensional verification event (`camera:frame`).
-   - **Robotic Arm:** Commands picking, rotation, and placement into the designated destination bin (`SORTING` → `SORTED`).
-   - **Dispatch:** Handed over to logistics carrier (`DISPATCHED`).
-3. Conveyor controls and fault simulation are accessible in real-time on the Operator Conveyor page.
+ParcelFlow features a physical-first industrial sorting pipeline that supports both real hardware microcontrollers and a synchronous digital twin simulator:
+
+1. **Shipping Label Studio:** Generates authenticated `PF1.<parcelId>.<mac10>` vector QR & Code 128 labels with batch printing (single 100x100mm, 2x3 A4 sheets) and QR calibration test sheets (20mm–40mm).
+2. **Optical QR Camera Scanning:** The Operator Conveyor page accesses physical webcams via `navigator.mediaDevices.getUserMedia` using `@zxing/browser` with device picker, HUD targeting reticle, decode latency telemetry, and manual override.
+3. **Hardware Microcontroller API (`/api/hardware/*`):** ESP32 conveyor and robotic arm microcontrollers connect via authenticated REST calls using `X-Device-Token` header:
+   - Conveyor controller reports break-beam sensor activations (`IR1` at infeed, `IR2` at pick point) and polls desired conveyor state (`RUN` / `HOLD` / `STOP`).
+   - Robotic arm controller polls queued commands (`GET /api/hardware/commands/next`), acknowledges (`ack`), executes 4-DOF servo positioning (Base, Shoulder, Elbow, Wrist), and confirms placement (`complete`).
+4. **Category-Based Routing:** 4 data-driven category bins (Electronics, Mechanical & Tools, Healthcare & Safety, Apparel & General) with editable servo presets configured in the Admin portal.
+5. **Watchdog & Interlock Safety:** E-Stop hardware and software triggers, heartbeat liveness monitoring (5s timeout), and automatic conveyor halt on break-beam anomalies.
+
+---
+
+## Testing & Quality Assurance
+
+Run the automated test suite covering security, labels, optical scanning, and hardware pipelines:
+
+```bash
+# Run all unit and integration tests (Vitest)
+npm test
+
+# Run TypeScript typecheck
+npm run typecheck
+
+# Run production build validation
+npm run build
+```
 
 ---
 
@@ -122,10 +140,14 @@ The built-in conveyor and sorting engine runs continuously inside `src/server/ha
 | Document | Description |
 |---|---|
 | [PRD.md](PRD.md) | Product Requirements Document — features, user roles, success criteria |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, tech stack, directory structure, data flow |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System architecture, tech stack, directory structure, Mermaid sequence diagram |
 | [DESIGN_SYSTEM.md](DESIGN_SYSTEM.md) | Visual design tokens, components, typography, responsive patterns |
 | [CODE_STYLE.md](CODE_STYLE.md) | Coding conventions, naming, import order, error handling patterns |
 | [TESTING.md](TESTING.md) | Test cases for auth, RBAC, data isolation, manual testing procedures |
-| [SECURITY.md](SECURITY.md) | Authentication, authorization, password hashing, rate limiting, data isolation |
+| [SECURITY.md](SECURITY.md) | Authentication, authorization, PBKDF2 210k iterations, device token, HMAC labels |
+| [docs/HARDWARE_API.md](docs/HARDWARE_API.md) | ESP32 REST API contract, payloads, sequence flows, error codes |
+| [docs/ROUTING.md](docs/ROUTING.md) | Category-to-bin mapping, servo presets, overflow handling |
+| [docs/ENABLE_GOOGLE_SIGNIN.md](docs/ENABLE_GOOGLE_SIGNIN.md) | Operator & Admin runbook for configuring Firebase Google authentication |
+| [docs/AUDIT.md](docs/AUDIT.md) | Comprehensive audit findings (A1–A14) and verification matrix |
 | [AGENTS.md](AGENTS.md) | AI agent instructions — rules, architecture reference, common pitfalls |
 

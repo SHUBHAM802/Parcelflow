@@ -247,22 +247,49 @@ IR Sensor Trigger (1.8s)
     ↓
 Status: DETECTED
     ↓
-Camera Capture (0.8s)
-    ↓
-Robot Arm: PICKING (1.0s)
-    ↓
-Robot Arm: MOVING (1.0s)
-    ↓
-Robot Arm: PLACING (0.9s)
-    ↓
-Status: SORTED
-    ↓
-Delay (2.5s)
-    ↓
-Status: DISPATCHED
-```
+### Physical Pipeline Architecture & Real Hardware Integration
 
-The engine processes one order at a time from the `ON_CONVEYOR` queue, broadcasts status updates via Socket.io, and records sorting results to the database.
+ParcelFlow supports dual operational modes:
+- **`HARDWARE_MODE=real`**: Real hardware pipeline driven by microcontrollers (ESP32) and live camera feed via `navigator.mediaDevices.getUserMedia`.
+- **`HARDWARE_MODE=simulator`**: Synchronous digital twin hardware simulator with full event broadcast.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Operator as Operator (Browser)
+    participant Cam as Web Camera (ZXing)
+    participant API as ParcelFlow Backend (Express)
+    participant DB as SQLite (sql.js)
+    participant ESP_C as Conveyor ESP32 (IR1/IR2/Motor)
+    participant ESP_A as Arm ESP32 (4-DOF Servos)
+    participant UI as Sockets (All Portals)
+
+    Operator->>API: POST /api/warehouse/labels (Generate PF1.<id>.<mac10>)
+    API->>DB: Record parcel (status: LABELED)
+    Operator->>Cam: Present parcel QR code to camera
+    Cam->>API: POST /api/operator/scan (payload, source)
+    API->>API: Verify HMAC-SHA256 signature & Category Routing
+    API->>DB: Update parcel (status: SCANNED), Create Command (status: QUEUED)
+    API->>UI: Emit parcel:scanned & state:changed (Order: SCANNED)
+    ESP_C->>API: POST /api/hardware/ir-event (IR1: TRIGGERED)
+    API->>ESP_C: Conveyor desired: HOLD/RUN (stop_and_scan)
+    Note over ESP_C,API: Parcel moves down conveyor belt to pick point
+    ESP_C->>API: POST /api/hardware/ir-event (IR2: TRIGGERED at pick point)
+    API->>DB: FIFO Match to oldest SCANNED parcel -> status: AT_PICK_POINT
+    API->>DB: Release Hardware Command -> status: RELEASED
+    API->>ESP_C: Conveyor desired: HOLD
+    API->>UI: Emit sensor:triggered (IR2) & parcel:at_pick_point
+    ESP_A->>API: GET /api/hardware/commands/next?deviceId=arm-esp32
+    API->>ESP_A: Return SORT_TO_BIN command (angles, bin number)
+    ESP_A->>API: POST /api/hardware/commands/:id/ack
+    API->>DB: Update parcel status -> SORTING
+    API->>UI: Emit parcel:sorting & robot:action
+    Note over ESP_A: Robotic arm actuates servos (PICK -> MOVE -> PLACE)
+    ESP_A->>API: POST /api/hardware/commands/:id/complete (durationMs, result: OK)
+    API->>DB: Update parcel & order status -> SORTED, increment bin parcel_count
+    API->>ESP_C: Resume conveyor: RUN
+    API->>UI: Emit parcel:sorted & state:changed (Order: SORTED)
+```
 
 ---
 
@@ -271,35 +298,45 @@ The engine processes one order at a time from the `ON_CONVEYOR` queue, broadcast
 ```
 PLACED → CONFIRMED → PICKING → PICKED → PACKING → PACKED
                                                       ↓
-                              ON_CONVEYOR → DETECTED → SORTING → SORTED
-                                                                    ↓
-                                                              DISPATCHED → DELIVERED
-                                                              
+                                                ON_CONVEYOR
+                                                      ↓
+                                                   SCANNED   (Optical QR Code verified)
+                                                      ↓
+                                                  DETECTED   (IR2 pick point break-beam)
+                                                      ↓
+                                                   SORTING   (Robotic arm picking & placing)
+                                                      ↓
+                                                   SORTED    (Placed into category destination bin)
+                                                      ↓
+                                                DISPATCHED → DELIVERED
+
 Any* → CANCELLED
 DELIVERED → RETURN_REQUESTED → RETURN_APPROVED / RETURN_REJECTED
 ```
 
-State transitions are enforced by `orderStateMachine.ts` which validates that each transition is valid before applying it.
+State transitions are strictly enforced by `orderStateMachine.ts` which validates transition legitimacy before committing changes to the database.
 
 ---
 
 ## 10. API Structure
 
-All endpoints are under `/api/`:
+All endpoints are hosted under `/api/`:
 
 | Prefix | Purpose | Auth Level |
 |---|---|---|
-| `/api/auth/*` | Login, register, forgot/reset password, session | Public / Rate-limited |
+| `/api/auth/*` | Login, register, forgot/reset password, Google login | Public / Rate-limited |
+| `/api/hardware/*` | ESP32 device API (heartbeat, IR events, command queue, conveyor state) | `requireDeviceToken` |
+| `/api/operator/*` | Operator live pipeline, camera scan, E-Stop, label studio | `requireStaff` |
 | `/api/catalog/*` | Product catalog, categories, reviews | Public (read) / Auth (write) |
 | `/api/cart/*` | Shopping cart CRUD | `requireUser` |
 | `/api/wishlist/*` | Wishlist management | `requireUser` |
 | `/api/addresses/*` | Address CRUD | `requireUser` |
-| `/api/orders/*` | Order creation, viewing, status | `requireUser` |
-| `/api/invoices/*` | Invoice retrieval | `requireUser` |
+| `/api/orders/*` | Order creation, viewing, customer tracking | `requireUser` |
+| `/api/invoices/*` | GST invoice retrieval | `requireUser` |
 | `/api/warehouse/*` | Queue, picking, packing, conveyor, alerts | `requireStaff` |
-| `/api/inventory/*` | Stock management | `requireStaff` |
-| `/api/analytics/*` | Dashboard analytics | `requireAdmin` |
-| `/api/admin/*` | User/system management | `requireAdmin` |
+| `/api/inventory/*` | Stock & rack location management | `requireStaff` |
+| `/api/analytics/*` | Dashboard analytics (excludes demo orders from revenue) | `requireAdmin` |
+| `/api/admin/*` | User management & 4-DOF servo bin configuration | `requireAdmin` |
 
 ---
 

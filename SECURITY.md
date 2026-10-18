@@ -3,22 +3,21 @@
 ## 1. Authentication
 
 ### Password Storage
-- Passwords are hashed using **PBKDF2** with:
+- Passwords are hashed using **PBKDF2-SHA512** with:
   - Random 16-byte salt per user
-  - 10,000 iterations
+  - **210,000 iterations** (OWASP 2024+ guideline)
   - 64-byte key length
   - SHA-512 digest
-- Stored format: `salt:hash` (hex-encoded)
-- Legacy plain-text passwords are automatically migrated to PBKDF2 on database load
-- Password comparison uses `crypto.timingSafeEqual` to prevent timing attacks
+- Stored format: `iterations:salt:hash` (all hex-encoded)
+- Transparent on-login migration: Accounts previously hashed at 10,000 iterations are automatically re-hashed to 210,000 iterations upon their next successful login.
+- Password comparison uses `crypto.timingSafeEqual` to prevent timing attacks.
 
 ### JWT Tokens
 - Algorithm: HMAC-SHA256
-- Secret: Configured via `JWT_SECRET` environment variable
+- Secret: Configured via `JWT_SECRET` environment variable (strictly enforced by Zod configuration loader, min 32 characters, no fallback default).
 - Expiry: 7 days from issuance
-- Payload: `{ id, email, role, name, iat, exp }`
-- Token verification checks signature integrity and expiration
-- Legacy `pf-jwt-*` token format supported for backward compatibility
+- Payload: `{ sub, id, email, role, name, iat, exp }`
+- Token verification validates signature integrity, HMAC algorithm (`HS256`), and expiration.
 
 ### Session Management
 - JWT token stored in `localStorage` as `parcelflow_token`
@@ -27,13 +26,12 @@
 - Token sent via `Authorization: Bearer <token>` header on every API request
 - Fallback: `x-user-id` header (for backward compatibility)
 
-### Firebase Google Authentication Security
-- **Modular Client SDK:** Uses Firebase Modular v10+ with `GoogleAuthProvider` and `signInWithPopup`.
-- **Credential Protection:** Client credentials (`VITE_FIREBASE_*`) are strictly public web configuration identifiers. No server secrets, service account credentials, or Firebase Admin private keys are exposed to the client.
-- **Backend ID Token Claim Verification:** Backend inspects Firebase ID token claims (`exp`, `sub`, `email`) before creating sessions.
-- **Strict Role Isolation:** Newly registered Google users are strictly provisioned with `role = 'customer'`. Google authentication cannot grant `operator` or `admin` privileges.
-- **Safe Account Linking:** If an existing user registered via email/password logs in with Google using the same verified email, the accounts are safely linked by associating `firebase_uid` rather than duplicating the record or altering roles.
-- **Synchronized Sign-Out:** Application logout clears local tokens, resets React auth state, and signs the user out of the active Firebase session via `signOut(auth)`.
+### Firebase Google Authentication Hardening (Audit Finding A1 Fix)
+- **Cryptographic Signature Verification:** `POST /api/auth/google` cryptographically verifies the Firebase ID token signature using RS256 public keys fetched from Google's JSON Web Key Set (`https://www.googleapis.com/oauth2/v3/certs`) via the `jose` library.
+- **Mandatory ID Token:** The `idToken` parameter is strictly required (`400 Bad Request` if missing). Plain email addresses from the client request body are never trusted for authentication or role assignment.
+- **Audience & Issuer Claims:** Validates `iss === https://securetoken.google.com/<FIREBASE_PROJECT_ID>` and `aud === FIREBASE_PROJECT_ID`.
+- **Role Isolation:** Newly provisioned Google accounts strictly receive `role = 'customer'`. Admin and operator accounts cannot be hijacked or created via Google Sign-In.
+- **Service Discovery & Graceful Degradation:** If `FIREBASE_PROJECT_ID` is unconfigured in `.env`, `/api/auth/providers` returns `google: false`, and the UI hides the Google login button. Attempts to POST to the endpoint return `503 Service Unavailable`.
 
 ---
 
@@ -156,25 +154,27 @@ Customer A can never query, view, modify, or delete Customer B's data.
 
 ---
 
-## 10. Hardware Communication Security
+## 10. Hardware Communication & Microcontroller Security
 
-- Socket.io configured with CORS for development
-- Hardware simulator runs server-side only; no direct browser-to-ESP32 communication
-- Conveyor control commands (start/stop/emergency) require `requireStaff` authentication
-- Fault simulation requires `requireStaff` authentication
-- Machine status is broadcast to all connected clients (read-only telemetry)
+- **Device Token Authentication (`requireDeviceToken`):** All endpoints under `/api/hardware/*` (heartbeat, IR break-beam sensor events, command polling, conveyor desired state) require the `X-Device-Token` HTTP header.
+- **Constant-Time Token Comparison:** Tokens are compared using `crypto.timingSafeEqual` over raw byte buffers to eliminate timing side-channel attacks.
+- **Zero-Downtime Rotation Slot:** The backend supports an optional `DEVICE_TOKEN_NEXT` environment variable, enabling staged credential rotation without interrupting active microcontroller pipelines.
+- **Watchdog Liveness Tracking:** A backend background timer monitors device heartbeats. If an ESP32 microcontroller fails to report within 5 seconds, an automatic communication fault (`HEARTBEAT_TIMEOUT`) is generated and the conveyor is halted into `HOLD`.
+- **E-Stop Interlock:** Hardware and software emergency stop triggers immediately freeze conveyor actuation and cancel all queued arm dispatch commands.
 
 ---
 
-## 11. Production Considerations
+## 11. Shipping Label Symbology & Anti-Forgery
 
-When deploying to production, the following should be addressed:
-- Replace the default `JWT_SECRET` with a cryptographically strong random value
-- Restrict CORS to specific allowed origins
-- Implement HTTPS/TLS termination
-- Add CSRF protection for cookie-based sessions (if applicable)
-- Implement email-based password reset (replace token-in-response with email delivery)
-- Add audit logging for admin actions
-- Consider rate limiting at the reverse proxy level (nginx, Cloudflare)
-- Rotate JWT secrets periodically
-- Database backups and encryption at rest
+- **Format:** `PF1.<parcelId>.<mac10>`
+- **HMAC-SHA256 Authentication:** Each printed label contains a 10-character cryptographic Message Authentication Code derived from `HMAC-SHA256(parcelId, LABEL_SECRET)`.
+- **Optical Verification:** Scanned payloads are checked with constant-time MAC verification prior to any database state modification or destination routing.
+- **Physical Barcode Standards:** Labels render authentic, scannable QR codes (2D) and Code 128 barcodes (1D) using vector SVG rather than simulated raster gradients.
+
+---
+
+## 12. Database Integrity & Atomic Persistence
+
+- **Atomic Writes:** Database exports are written to a `.tmp` file first, backed up to `.bak`, and renamed atomically onto the active `parcelflow.sqlite` database file.
+- **Anti-Corruption Guarantees:** Power failure or crash during disk writes cannot corrupt the primary SQLite database.
+- **Single-Parcel Safety Gate:** When single-parcel mode is active, optical scanning rejects new infeed parcels with `BUSY` until the active parcel completes its sort and arm placement.

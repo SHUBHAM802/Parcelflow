@@ -9,7 +9,10 @@
     "start": "node dist/server.cjs",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "sim:real-check": "node scripts/e2e-happy-path.cjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -42,11 +45,14 @@
     "@types/express": "^4.17.21",
     "@types/node": "^22.14.0",
     "@types/sql.js": "^1.4.11",
+    "@types/supertest": "^6.0.2",
     "autoprefixer": "^10.4.21",
     "esbuild": "^0.25.0",
+    "supertest": "^7.0.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",
-    "vite": "^6.2.3"
+    "vite": "^6.2.3",
+    "vitest": "^3.0.0"
   }
 }
