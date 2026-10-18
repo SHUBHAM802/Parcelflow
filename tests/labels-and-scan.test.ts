@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll } from 'vitest';
-import { getDb, queryOne, run } from '../src/server/db';
+import { getDb, queryOne, run, query } from '../src/server/db';
 import { loadConfig } from '../src/server/config';
 import { generateLabelPayload, verifyLabelPayload, createOrGetLabel, resolveRoutingBin } from '../src/server/services/labelService';
 import { processScan } from '../src/server/services/scanService';
@@ -140,9 +140,52 @@ describe('Labels, Payload Verification & Optical Scan Pipeline', () => {
   });
 
   describe('2.1 Category-Based Destination Bin Routing', () => {
-    it('resolves correct bin based on product category', () => {
-      const bins = queryOne<{ count: number }>("SELECT COUNT(*) as count FROM bins");
-      expect(bins?.count).toBeGreaterThanOrEqual(4);
+    it('maps all 4 bins correctly: Bin1 Electronics, Bin2 Fashion, Bin3 Books, Bin4 Overflow', () => {
+      const bin1 = queryOne<{ category_id: string; is_overflow: number }>("SELECT category_id, is_overflow FROM bins WHERE bin_number = 1");
+      const bin2 = queryOne<{ category_id: string; is_overflow: number }>("SELECT category_id, is_overflow FROM bins WHERE bin_number = 2");
+      const bin3 = queryOne<{ category_id: string; is_overflow: number }>("SELECT category_id, is_overflow FROM bins WHERE bin_number = 3");
+      const bin4 = queryOne<{ category_id: string | null; is_overflow: number }>("SELECT category_id, is_overflow FROM bins WHERE bin_number = 4");
+
+      expect(bin1?.category_id).toBe('cat-electronics');
+      expect(bin2?.category_id).toBe('cat-fashion');
+      expect(bin3?.category_id).toBe('cat-books');
+      expect(bin4?.is_overflow).toBe(1);
+    });
+
+    it('every seeded product in the database resolves to a valid destination bin', () => {
+      const products = query<{ id: string; name: string; category_id: string }>("SELECT id, name, category_id FROM products");
+      expect(products.length).toBeGreaterThan(0);
+
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+      for (const product of products) {
+        const testOrderId = `ORD-ROUTE-${product.id}-${Date.now()}`;
+        run(`
+          INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+          VALUES (?, 'usr-cust-demo', 999, 800, 199, 'PACKED', 'PAID', 'Mumbai', ?, ?)
+        `, [testOrderId, now, now]);
+
+        run(`
+          INSERT INTO order_items (id, order_id, product_id, quantity, unit_price)
+          VALUES (?, ?, ?, 1, 800)
+        `, [`item-${testOrderId}`, testOrderId, product.id]);
+
+        const routing = resolveRoutingBin(testOrderId);
+        expect(routing, `Product ${product.id} (${product.name}) in category ${product.category_id} must resolve to a bin`).not.toBeNull();
+        expect(routing?.binNumber).toBeGreaterThanOrEqual(1);
+        expect(routing?.binNumber).toBeLessThanOrEqual(4);
+
+        if (product.category_id === 'cat-electronics') {
+          expect(routing?.binNumber).toBe(1);
+        } else if (product.category_id === 'cat-fashion') {
+          expect(routing?.binNumber).toBe(2);
+        } else if (product.category_id === 'cat-books') {
+          expect(routing?.binNumber).toBe(3);
+        } else {
+          // Home & Kitchen, Fitness, Accessories -> Overflow
+          expect(routing?.binNumber).toBe(4);
+        }
+      }
     });
   });
 });

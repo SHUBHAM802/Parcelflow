@@ -169,6 +169,19 @@ function runMigrations(db: Database) {
     recordMigration(db, '003_bins_table');
   }
 
+  // Migration 003b: ensure default bins map to REAL product categories (Electronics, Fashion, Books, Overflow)
+  if (!hasMigration(db, '003b_default_category_bins')) {
+    db.run(`
+      INSERT OR REPLACE INTO bins (id, bin_number, label, category_id, is_overflow, servo_preset_json, is_active, parcel_count, updated_at)
+      VALUES
+        ('bin-1', 1, 'BIN 1', 'cat-electronics', 0, '{"base":45,"shoulder":90,"elbow":120,"wrist":90}', 1, 0, datetime('now')),
+        ('bin-2', 2, 'BIN 2', 'cat-fashion', 0, '{"base":90,"shoulder":85,"elbow":110,"wrist":90}', 1, 0, datetime('now')),
+        ('bin-3', 3, 'BIN 3', 'cat-books', 0, '{"base":135,"shoulder":80,"elbow":105,"wrist":90}', 1, 0, datetime('now')),
+        ('bin-4', 4, 'BIN 4', NULL, 1, '{"base":170,"shoulder":75,"elbow":100,"wrist":90}', 1, 0, datetime('now'));
+    `);
+    recordMigration(db, '003b_default_category_bins');
+  }
+
   // Migration 004: parcels table
   if (!hasMigration(db, '004_parcels_table')) {
     db.run(`
