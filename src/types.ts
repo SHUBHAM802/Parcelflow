@@ -266,3 +266,75 @@ export interface DashboardData {
     machineUptime: string;
   };
 }
+
+// ── Pipeline Domain Types ────────────────────────────────
+
+export interface Bin {
+  id: string;
+  bin_number: number;
+  label: string;
+  category_id: string | null;
+  category_name?: string;
+  is_overflow: number;
+  servo_preset_json: string;
+  is_active: number;
+  parcel_count: number;
+  updated_at: string;
+}
+
+export interface Parcel {
+  id: string;
+  order_id: string;
+  label_version: number;
+  label_payload: string;
+  label_print_count: number;
+  first_printed_at: string | null;
+  last_printed_at: string | null;
+  status: 'LABELED' | 'SCANNED' | 'AT_PICK_POINT' | 'SORTING' | 'SORTED' | 'FAILED';
+  assigned_bin_id: string | null;
+  bin_label?: string;
+  bin_number?: number;
+  scanned_at: string | null;
+  at_pick_point_at: string | null;
+  sorted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ScanEvent {
+  id: string;
+  parcel_id: string | null;
+  raw_payload: string;
+  source: 'browser_camera' | 'python_camera' | 'manual' | 'simulator';
+  result: 'ACCEPTED' | 'DUPLICATE' | 'INVALID_FORMAT' | 'BAD_CHECKSUM' | 'UNKNOWN_PARCEL' | 'WRONG_STATE' | 'BUSY' | 'REJECTED';
+  reason: string | null;
+  operator_id: string | null;
+  device_id: string | null;
+  decode_ms: number | null;
+  created_at: string;
+}
+
+export interface HardwareCommand {
+  id: string;
+  device_id: string;
+  type: 'SORT_TO_BIN' | 'CONVEYOR_RUN' | 'CONVEYOR_STOP' | 'E_STOP';
+  parcel_id: string | null;
+  bin_id: string | null;
+  payload_json: string;
+  status: 'QUEUED' | 'SENT' | 'ACKED' | 'DONE' | 'FAILED' | 'EXPIRED';
+  attempts: number;
+  idempotency_key: string;
+  created_at: string;
+  completed_at: string | null;
+  failure_reason: string | null;
+}
+
+export interface PipelineFault {
+  id: string;
+  type: string;
+  parcel_id: string | null;
+  detail: string | null;
+  created_at: string;
+  acked_at: string | null;
+  acked_by: string | null;
+}

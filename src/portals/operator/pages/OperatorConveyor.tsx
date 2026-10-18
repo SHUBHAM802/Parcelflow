@@ -5,6 +5,7 @@ import { Button } from '../../../shared/components/Button';
 import { StatusPill } from '../../../shared/components/StatusPill';
 import { useToast } from '../../../shared/store/toastContext';
 import { getSocket } from '../../../shared/lib/socket';
+import { BarcodeScanner } from '../components/BarcodeScanner';
 import {
   Play,
   Square,
@@ -291,6 +292,20 @@ export const OperatorConveyor: React.FC<OperatorConveyorProps> = ({
                 <span>BIN: {machineState.activeOrderBin || 'NONE'}</span>
               </div>
             </div>
+          </div>
+
+          {/* Live QR Scanner Panel */}
+          <div className="bg-white border border-zinc-200/80 rounded-2xl p-5 shadow-xs">
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 pb-3 border-b border-zinc-100 mb-4">Live QR Scanner</h3>
+            <BarcodeScanner
+              onScanResult={(result) => {
+                if (result.result === 'ACCEPTED') {
+                  fetchReadyOrders();
+                  fetchLogs();
+                  fetchDestinations();
+                }
+              }}
+            />
           </div>
 
           {/* Quick Infeed Bar */}

@@ -1279,7 +1279,7 @@ export function createApiRouter(io: SocketIOServer) {
       picking: orders.filter(o => o.status === 'PICKING'),
       packing: orders.filter(o => o.status === 'PICKED' || o.status === 'PACKING'),
       ready: orders.filter(o => o.status === 'PACKED'),
-      conveyor: orders.filter(o => ['ON_CONVEYOR', 'CONVEYOR_QUEUED', 'DETECTED', 'SORTING', 'SORTED'].includes(o.status)),
+      conveyor: orders.filter(o => ['ON_CONVEYOR', 'CONVEYOR_QUEUED', 'SCANNED', 'DETECTED', 'SORTING', 'SORTED'].includes(o.status)),
       dispatched: orders.filter(o => o.status === 'DISPATCHED' || o.status === 'DELIVERED')
     };
 
@@ -1447,6 +1447,171 @@ export function createApiRouter(io: SocketIOServer) {
 
   router.get(['/warehouse/machine-state', '/warehouse/conveyor/state'], (_req: Request, res: Response) => {
     return res.json(getMachineState());
+  });
+
+  // ==========================================
+  // LABELS & PARCELS
+  // ==========================================
+  router.post('/warehouse/labels/generate', requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { orderId } = req.body;
+    if (!orderId) return res.status(400).json({ error: 'orderId is required' });
+
+    // Verify order exists and is in a valid state for labeling
+    const order = queryOne<{ id: string; status: string }>(
+      "SELECT id, status FROM orders WHERE id = ?", [orderId]
+    );
+    if (!order) return res.status(404).json({ error: `Order ${orderId} not found` });
+    if (!['PACKED', 'PICKED', 'PACKING'].includes(order.status)) {
+      return res.status(400).json({ error: `Order is ${order.status} — must be PACKED to generate a label` });
+    }
+
+    try {
+      const { createOrGetLabel } = require('./services/labelService');
+      const result = createOrGetLabel(orderId);
+      return res.json({
+        success: true,
+        parcel: result.parcel,
+        labelPayload: result.labelPayload,
+        bin: result.bin,
+        isNew: result.isNew
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to generate label' });
+    }
+  });
+
+  router.post('/warehouse/labels/printed', requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { parcelId } = req.body;
+    if (!parcelId) return res.status(400).json({ error: 'parcelId is required' });
+
+    try {
+      const { recordLabelPrinted } = require('./services/labelService');
+      recordLabelPrinted(parcelId);
+      return res.json({ success: true });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Failed to record print' });
+    }
+  });
+
+  router.get('/warehouse/parcels', requireStaff, (_req: Request, res: Response) => {
+    const parcels = query(`
+      SELECT p.*, o.destination_city, o.status as order_status, u.name as customer_name,
+        b.label as bin_label, b.bin_number
+      FROM parcels p
+      JOIN orders o ON p.order_id = o.id
+      JOIN users u ON o.customer_id = u.id
+      LEFT JOIN bins b ON p.assigned_bin_id = b.id
+      ORDER BY p.created_at DESC
+      LIMIT 100
+    `);
+    return res.json(parcels);
+  });
+
+  router.get('/warehouse/parcels/:parcelId', requireStaff, (req: Request, res: Response) => {
+    const { parcelId } = req.params;
+    const parcel = queryOne(`
+      SELECT p.*, o.destination_city, o.status as order_status, u.name as customer_name,
+        b.label as bin_label, b.bin_number
+      FROM parcels p
+      JOIN orders o ON p.order_id = o.id
+      JOIN users u ON o.customer_id = u.id
+      LEFT JOIN bins b ON p.assigned_bin_id = b.id
+      WHERE p.id = ?
+    `, [parcelId]);
+    if (!parcel) return res.status(404).json({ error: 'Parcel not found' });
+    return res.json(parcel);
+  });
+
+  // ==========================================
+  // SCAN ENDPOINT
+  // ==========================================
+  router.post('/warehouse/scan', requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { payload, source, decodeMs, deviceId } = req.body;
+    if (!payload) return res.status(400).json({ error: 'payload is required' });
+
+    try {
+      const { processScan } = require('./services/scanService');
+      const result = processScan({
+        payload: String(payload),
+        source: source || 'browser_camera',
+        decodeMs: decodeMs ? Number(decodeMs) : undefined,
+        deviceId: deviceId || undefined,
+        operatorId: req.user?.id
+      }, io);
+      return res.json(result);
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message || 'Scan processing failed' });
+    }
+  });
+
+  router.get('/warehouse/scan-events', requireStaff, (_req: Request, res: Response) => {
+    const events = query(`
+      SELECT se.*, p.order_id
+      FROM scan_events se
+      LEFT JOIN parcels p ON se.parcel_id = p.id
+      ORDER BY se.created_at DESC
+      LIMIT 50
+    `);
+    return res.json(events);
+  });
+
+  // ==========================================
+  // BINS (category-based routing)
+  // ==========================================
+  router.get('/warehouse/bins-config', requireStaff, (_req: Request, res: Response) => {
+    const bins = query(`
+      SELECT b.*, c.name as category_name, c.slug as category_slug
+      FROM bins b
+      LEFT JOIN categories c ON b.category_id = c.id
+      ORDER BY b.bin_number ASC
+    `);
+    return res.json(bins);
+  });
+
+  router.put('/warehouse/bins-config/:binId', requireStaff, (req: Request, res: Response) => {
+    const { binId } = req.params;
+    const { label, category_id, servo_preset_json, is_active } = req.body;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    if (label !== undefined) run("UPDATE bins SET label = ?, updated_at = ? WHERE id = ?", [label, now, binId]);
+    if (category_id !== undefined) run("UPDATE bins SET category_id = ?, updated_at = ? WHERE id = ?", [category_id, now, binId]);
+    if (servo_preset_json !== undefined) run("UPDATE bins SET servo_preset_json = ?, updated_at = ? WHERE id = ?", [servo_preset_json, now, binId]);
+    if (is_active !== undefined) run("UPDATE bins SET is_active = ?, updated_at = ? WHERE id = ?", [is_active ? 1 : 0, now, binId]);
+
+    return res.json({ success: true });
+  });
+
+  // ==========================================
+  // HARDWARE COMMAND QUEUE
+  // ==========================================
+  router.get('/warehouse/hardware/commands', requireStaff, (_req: Request, res: Response) => {
+    const cmds = query(`
+      SELECT hc.*, b.label as bin_label, b.bin_number
+      FROM hardware_commands hc
+      LEFT JOIN bins b ON hc.bin_id = b.id
+      ORDER BY hc.created_at DESC
+      LIMIT 50
+    `);
+    return res.json(cmds);
+  });
+
+  router.get('/warehouse/pipeline-state', requireStaff, (_req: Request, res: Response) => {
+    const rows = query<{ key: string; value: string }>("SELECT key, value FROM pipeline_state");
+    const state: Record<string, string> = {};
+    for (const r of rows) state[r.key] = r.value;
+    return res.json(state);
+  });
+
+  router.get('/warehouse/pipeline-faults', requireStaff, (_req: Request, res: Response) => {
+    const faults = query("SELECT * FROM pipeline_faults ORDER BY created_at DESC LIMIT 50");
+    return res.json(faults);
+  });
+
+  router.post('/warehouse/pipeline-faults/:id/ack', requireStaff, (req: AuthenticatedRequest, res: Response) => {
+    const { id } = req.params;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+    run("UPDATE pipeline_faults SET acked_at = ?, acked_by = ? WHERE id = ?", [now, req.user?.id || null, id]);
+    return res.json({ success: true });
   });
 
   // ==========================================
