@@ -164,6 +164,71 @@ describe('Hardware API, IR Detection & Robotic Arm Pipeline', () => {
       );
       expect(sortLog?.sort_result).toBe('SUCCESS');
     });
+
+    it('an ON_CONVEYOR order does NOT progress until a scan and an IR2 event occur', async () => {
+      resetIrSensorHistory();
+      run("UPDATE parcels SET status = 'DONE_TEST' WHERE status IN ('SCANNED', 'AT_PICK_POINT', 'SORTING')");
+      const orderId = `ORD-NO-AUTO-${Date.now()}`;
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+      // 1. Place order on conveyor
+      run(`
+        INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+        VALUES (?, 'usr-cust-demo', 1999, 1600, 399, 'ON_CONVEYOR', 'PAID', 'Mumbai', ?, ?)
+      `, [orderId, now, now]);
+
+      const prod = queryOne<{ id: string }>("SELECT id FROM products LIMIT 1");
+      if (prod) {
+        run(`INSERT INTO order_items (id, order_id, product_id, quantity, unit_price) VALUES (?, ?, ?, 1, 1600)`,
+          [`item-${orderId}`, orderId, prod.id]
+        );
+      }
+
+      const labelData = createOrGetLabel(orderId);
+
+      // 2. Wait and verify order does NOT auto-advance without scan
+      await new Promise(r => setTimeout(r, 100));
+      const orderBeforeScan = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
+      expect(orderBeforeScan?.status).toBe('ON_CONVEYOR');
+
+      // 3. Scan the parcel
+      const scanRes = processScan({
+        payload: labelData.labelPayload,
+        source: 'browser_camera',
+        decodeMs: 25
+      });
+      expect(scanRes.result).toBe('ACCEPTED');
+
+      const orderAfterScan = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
+      expect(orderAfterScan?.status).toBe('SCANNED');
+
+      // 4. Wait again and verify order does NOT advance to DETECTED/SORTED without IR2
+      await new Promise(r => setTimeout(r, 100));
+      const orderBeforeIr2 = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
+      expect(orderBeforeIr2?.status).toBe('SCANNED');
+
+      // 5. Trigger IR2 at pick point
+      const ir2Res = handleIrEvent({
+        deviceId: 'conveyor-esp32',
+        sensorId: 'IR2',
+        state: 'TRIGGERED',
+        seq: 888,
+        ts: Date.now()
+      });
+      expect(ir2Res.success).toBe(true);
+
+      const orderAfterIr2 = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
+      expect(orderAfterIr2?.status).toBe('DETECTED');
+
+      // 6. Complete sorting command
+      const cmd = getNextCommandForDevice('arm-esp32');
+      expect(cmd).not.toBeNull();
+      acknowledgeCommand(cmd!.commandId);
+      completeCommand(cmd!.commandId, 1500);
+
+      const orderFinal = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
+      expect(orderFinal?.status).toBe('SORTED');
+    });
   });
 
   describe('5.3 Unified Pipeline Snapshot', () => {
