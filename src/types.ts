@@ -6,6 +6,8 @@ export interface User {
   email: string;
   role: Role;
   phone?: string;
+  avatar_url?: string;
+  firebase_uid?: string;
   created_at?: string;
 }
 

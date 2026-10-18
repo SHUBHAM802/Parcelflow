@@ -23,6 +23,8 @@ function applyPragmasAndIndexes(db: Database) {
     CREATE INDEX IF NOT EXISTS idx_sorting_logs_order_id ON sorting_logs(order_id);
     CREATE INDEX IF NOT EXISTS idx_cart_items_customer_id ON cart_items(customer_id);
     CREATE INDEX IF NOT EXISTS idx_addresses_customer_id ON addresses(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);
   `);
 }
 
@@ -57,6 +59,24 @@ export async function getDb(): Promise<Database> {
       dbInstance.run("UPDATE users SET email = 'rahul@parcelflow.com' WHERE email = 'rahul@parcelflow.demo'");
       dbInstance.run("UPDATE users SET email = 'operator@parcelflow.com' WHERE email = 'operator@parcelflow.demo'");
       dbInstance.run("UPDATE users SET email = 'admin@parcelflow.com' WHERE email = 'admin@parcelflow.demo'");
+      // Migration: create password_reset_tokens table if missing (for existing databases)
+      dbInstance.run(`
+        CREATE TABLE IF NOT EXISTS password_reset_tokens (
+          id TEXT PRIMARY KEY,
+          user_id TEXT REFERENCES users(id),
+          token TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          used INTEGER DEFAULT 0,
+          created_at TEXT DEFAULT (datetime('now'))
+        );
+      `);
+      // Migration: add avatar_url and firebase_uid columns to users table if missing
+      try {
+        dbInstance.run("ALTER TABLE users ADD COLUMN avatar_url TEXT;");
+      } catch {}
+      try {
+        dbInstance.run("ALTER TABLE users ADD COLUMN firebase_uid TEXT;");
+      } catch {}
       applyPragmasAndIndexes(dbInstance);
       migrateUserPasswords(dbInstance);
       saveDb();
@@ -146,6 +166,8 @@ async function initSchemaAndSeed(db: Database) {
       password_hash TEXT NOT NULL,
       role TEXT CHECK(role IN ('customer','operator','admin')) NOT NULL,
       phone TEXT,
+      avatar_url TEXT,
+      firebase_uid TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -312,6 +334,15 @@ async function initSchemaAndSeed(db: Database) {
       description TEXT NOT NULL,
       amount REAL NOT NULL,
       date TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      token TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
     );
   `);
 

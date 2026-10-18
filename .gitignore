@@ -38,3 +38,9 @@ Thumbs.db
 
 # Test & inspect artifacts
 inspect_output.txt
+
+# Graphify local state & caches (preserves graphify-out/ graph artifacts & reports)
+graphify-out/.*
+graphify-out/cost.json
+graphify-out/manifest.json
+.graphify_cache/

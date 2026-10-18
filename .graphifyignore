@@ -1,0 +1,24 @@
+# Graphify ignore patterns for ParcelFlow
+# Exclude scratch, test scripts, SQLite binaries, and sensitive environment files
+
+# Environment & sensitive credentials
+.env
+.env.*
+!.env.example
+
+# Databases
+*.sqlite
+*.sqlite3
+*.db
+parcelflow.sqlite
+
+# Scratch, inspection & temporary test files
+inspect_output.txt
+inspect.cjs
+inspect-db.cjs
+test-real-flow.cjs
+
+# Build & dependency directories (already skipped by default, explicitly listed for clarity)
+node_modules/
+dist/
+build/

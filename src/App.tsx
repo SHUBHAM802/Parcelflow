@@ -60,7 +60,8 @@ const MainApp: React.FC = () => {
 
   return (
     <div className="min-h-screen flex flex-col bg-zinc-50 text-zinc-900 font-sans antialiased selection:bg-orange-500/20 selection:text-orange-950">
-      <PortalSwitcherHeader />
+      {/* Black top global bar is strictly for Operator & Admin portals; removed from Customer storefront */}
+      {activeRole !== 'customer' && <PortalSwitcherHeader />}
       <div className="flex-1 flex flex-col">
         {activeRole === 'customer' && <CustomerPortal />}
         {activeRole === 'operator' && <OperatorPortal />}

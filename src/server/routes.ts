@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Router, Request, Response, NextFunction } from 'express';
 import { query, queryOne, run, transaction } from './db';
 import {
@@ -149,8 +150,208 @@ export function createApiRouter(io: SocketIOServer) {
     });
   });
 
+  // Google Authentication via Firebase
+  router.post('/auth/google', loginRateLimiter(10, 60 * 1000), (req: Request, res: Response) => {
+    const { uid, email, name, photoUrl, idToken } = req.body;
+
+    if (!uid || !email) {
+      return res.status(400).json({ error: 'Firebase UID and email are required for Google authentication' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const cleanUid = String(uid).trim();
+    const cleanName = (typeof name === 'string' && name.trim()) ? name.trim() : cleanEmail.split('@')[0];
+    const cleanPhoto = typeof photoUrl === 'string' ? photoUrl.trim() : '';
+
+    // If an ID token was passed, inspect token payload to verify claims
+    if (idToken && typeof idToken === 'string' && idToken.includes('.')) {
+      try {
+        const parts = idToken.split('.');
+        if (parts.length === 3) {
+          const payloadStr = Buffer.from(parts[1], 'base64').toString('utf8');
+          const payload = JSON.parse(payloadStr);
+          if (payload.exp && payload.exp * 1000 < Date.now()) {
+            return res.status(401).json({ error: 'Firebase ID token has expired. Please sign in again.' });
+          }
+          if (payload.email && payload.email.toLowerCase() !== cleanEmail) {
+            return res.status(401).json({ error: 'Token email does not match requested email.' });
+          }
+        }
+      } catch (tokenErr) {
+        console.warn('[ParcelFlow] Firebase token payload parse warning:', tokenErr);
+      }
+    }
+
+    // 1. Look for user by firebase_uid first
+    let user = queryOne<{
+      id: string;
+      name: string;
+      email: string;
+      role: 'customer' | 'operator' | 'admin';
+      phone: string;
+      avatar_url?: string;
+      firebase_uid?: string;
+    }>('SELECT id, name, email, role, phone, avatar_url, firebase_uid FROM users WHERE firebase_uid = ?', [cleanUid]);
+
+    // 2. If not found by firebase_uid, look for user by email (Account Linking)
+    if (!user) {
+      user = queryOne<{
+        id: string;
+        name: string;
+        email: string;
+        role: 'customer' | 'operator' | 'admin';
+        phone: string;
+        avatar_url?: string;
+        firebase_uid?: string;
+      }>('SELECT id, name, email, role, phone, avatar_url, firebase_uid FROM users WHERE LOWER(email) = ?', [cleanEmail]);
+
+      if (user) {
+        // Link existing account with this firebase_uid and update avatar if not set
+        run(
+          'UPDATE users SET firebase_uid = ?, avatar_url = COALESCE(avatar_url, ?) WHERE id = ?',
+          [cleanUid, cleanPhoto, user.id]
+        );
+        user.firebase_uid = cleanUid;
+        if (!user.avatar_url) user.avatar_url = cleanPhoto;
+      }
+    }
+
+    // 3. If still no user exists, create a new Customer account (strictly 'customer' role)
+    if (!user) {
+      const newId = `usr-${Date.now()}`;
+      const randomPassword = crypto.randomBytes(32).toString('hex');
+      const hashedPassword = hashPassword(randomPassword);
+
+      run(
+        `INSERT INTO users (id, name, email, password_hash, role, phone, avatar_url, firebase_uid)
+         VALUES (?, ?, ?, ?, 'customer', '', ?, ?)`,
+        [newId, cleanName, cleanEmail, hashedPassword, cleanPhoto, cleanUid]
+      );
+
+      // Create default customer shipping address
+      run(
+        `INSERT INTO addresses (id, customer_id, label, full_name, phone, line1, line2, city, state, pincode, is_default)
+         VALUES (?, ?, 'Home', ?, '', 'Flat 101, Green Valley', 'FC Road', 'Pune', 'Maharashtra', '411005', 1)`,
+        [`addr-${Date.now()}`, newId, cleanName]
+      );
+
+      user = {
+        id: newId,
+        name: cleanName,
+        email: cleanEmail,
+        role: 'customer',
+        phone: '',
+        avatar_url: cleanPhoto,
+        firebase_uid: cleanUid
+      };
+    }
+
+    // Google-authenticated user session payload
+    const safeUser = {
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      phone: user.phone || '',
+      avatar_url: user.avatar_url || cleanPhoto,
+      firebase_uid: user.firebase_uid || cleanUid
+    };
+
+    const token = generateToken(safeUser);
+
+    return res.json({
+      success: true,
+      user: safeUser,
+      token
+    });
+  });
+
   router.post('/auth/logout', (_req: Request, res: Response) => {
     return res.json({ success: true, message: 'Logged out successfully' });
+  });
+
+  // Forgot Password: Generate a 6-digit reset token
+  router.post('/auth/forgot-password', loginRateLimiter(5, 60 * 1000), (req: Request, res: Response) => {
+    const { email } = req.body;
+    if (!email || typeof email !== 'string') {
+      return res.status(400).json({ error: 'Email address is required' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const user = queryOne<{ id: string; name: string; email: string }>(
+      'SELECT id, name, email FROM users WHERE LOWER(email) = ?', [cleanEmail]
+    );
+
+    if (!user) {
+      // Security: don't reveal whether the email exists
+      return res.json({ success: true, message: 'If an account with that email exists, a password reset token has been generated.' });
+    }
+
+    // Invalidate any existing unused tokens for this user
+    run('UPDATE password_reset_tokens SET used = 1 WHERE user_id = ? AND used = 0', [user.id]);
+
+    // Generate 6-digit numeric token
+    const token = String(Math.floor(100000 + Math.random() * 900000));
+    const tokenId = `prt-${Date.now()}`;
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
+
+    run(
+      'INSERT INTO password_reset_tokens (id, user_id, token, expires_at) VALUES (?, ?, ?, ?)',
+      [tokenId, user.id, token, expiresAt]
+    );
+
+    // In production, this token would be sent via email/SMS.
+    // For development/demo, we return it in the response.
+    return res.json({
+      success: true,
+      message: 'Password reset token generated. In production, this would be sent to your email.',
+      token,
+      email: cleanEmail
+    });
+  });
+
+  // Reset Password: Validate token and update password
+  router.post('/auth/reset-password', loginRateLimiter(5, 60 * 1000), (req: Request, res: Response) => {
+    const { email, token, newPassword } = req.body;
+    if (!email || !token || !newPassword) {
+      return res.status(400).json({ error: 'Email, token, and new password are required' });
+    }
+
+    if (String(newPassword).length < 4) {
+      return res.status(400).json({ error: 'Password must be at least 4 characters long' });
+    }
+
+    const cleanEmail = String(email).trim().toLowerCase();
+    const user = queryOne<{ id: string }>('SELECT id FROM users WHERE LOWER(email) = ?', [cleanEmail]);
+    if (!user) {
+      return res.status(400).json({ error: 'Invalid email or token' });
+    }
+
+    const resetRecord = queryOne<{ id: string; expires_at: string; used: number }>(
+      'SELECT id, expires_at, used FROM password_reset_tokens WHERE user_id = ? AND token = ? AND used = 0 ORDER BY created_at DESC LIMIT 1',
+      [user.id, String(token).trim()]
+    );
+
+    if (!resetRecord) {
+      return res.status(400).json({ error: 'Invalid or expired reset token' });
+    }
+
+    // Check token expiry
+    const now = new Date();
+    const expiresAt = new Date(resetRecord.expires_at.replace(' ', 'T') + 'Z');
+    if (now > expiresAt) {
+      run('UPDATE password_reset_tokens SET used = 1 WHERE id = ?', [resetRecord.id]);
+      return res.status(400).json({ error: 'Reset token has expired. Please request a new one.' });
+    }
+
+    // Update password with proper PBKDF2 hashing
+    const hashedPassword = hashPassword(newPassword);
+    run('UPDATE users SET password_hash = ? WHERE id = ?', [hashedPassword, user.id]);
+
+    // Mark token as used
+    run('UPDATE password_reset_tokens SET used = 1 WHERE id = ?', [resetRecord.id]);
+
+    return res.json({ success: true, message: 'Password has been reset successfully. You can now log in with your new password.' });
   });
 
   router.get('/auth/me', (req: Request, res: Response) => {
