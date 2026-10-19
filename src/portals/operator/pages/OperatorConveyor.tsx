@@ -39,6 +39,8 @@ interface OperatorConveyorProps {
   onMachineStateChange?: (state: MachineState) => void;
 }
 
+const enableDemoHelpers = (import.meta as any).env?.VITE_ENABLE_DEMO_HELPERS === 'true';
+
 export const OperatorConveyor: React.FC<OperatorConveyorProps> = ({
   machineState,
   onMachineStateChange

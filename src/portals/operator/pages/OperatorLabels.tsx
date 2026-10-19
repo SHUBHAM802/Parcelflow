@@ -31,6 +31,8 @@ interface PackableOrder {
   label_print_count?: number;
 }
 
+const enableDemoHelpers = (import.meta as any).env?.VITE_ENABLE_DEMO_HELPERS === 'true';
+
 export const OperatorLabels: React.FC = () => {
   const { showToast } = useToast();
   const [orders, setOrders] = useState<PackableOrder[]>([]);
@@ -193,15 +195,17 @@ export const OperatorLabels: React.FC = () => {
             Refresh
           </Button>
 
-          <Button
-            variant="teal"
-            size="sm"
-            onClick={handleCreateDemoOrder}
-            disabled={creatingDemo}
-            icon={<Sparkles className="w-3.5 h-3.5" />}
-          >
-            {creatingDemo ? 'Creating...' : 'Create Demo Order'}
-          </Button>
+          {enableDemoHelpers && (
+            <Button
+              variant="teal"
+              size="sm"
+              onClick={handleCreateDemoOrder}
+              disabled={creatingDemo}
+              icon={<Sparkles className="w-3.5 h-3.5" />}
+            >
+              {creatingDemo ? 'Creating...' : 'Create Demo Order'}
+            </Button>
+          )}
         </div>
       </div>
 
