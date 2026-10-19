@@ -70,7 +70,7 @@ export function transitionOrderStatus(
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   run("UPDATE orders SET status = ?, updated_at = ? WHERE id = ?", [newStatus, now, orderId]);
 
-  const histId = `hist-${orderId}-${Date.now()}`;
+  const histId = `hist-${orderId}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   run(
     "INSERT INTO order_status_history (id, order_id, status, note, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?)",
     [histId, orderId, newStatus, note || `Transitioned to ${newStatus}`, changedBy || null, now]
