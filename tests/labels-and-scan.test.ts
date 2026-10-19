@@ -137,6 +137,50 @@ describe('Labels, Payload Verification & Optical Scan Pipeline', () => {
       expect(scan2.result).toBe('DUPLICATE');
       expect(scan2.parcelId).toBe(label.parcel.id);
     });
+
+    it('returns BUSY when single parcel mode is active and another parcel is in-flight', () => {
+      // 1. Have one parcel currently in-flight
+      run("UPDATE parcels SET status = 'DONE_TEST' WHERE status IN ('SCANNED', 'AT_PICK_POINT', 'SORTING')");
+      const inFlightOrderId = `ORD-INFLIGHT-${Date.now()}`;
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+      run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+           VALUES (?, 'usr-cust-demo', 999, 800, 199, 'ON_CONVEYOR', 'PAID', 'Delhi', ?, ?)`, [inFlightOrderId, now, now]);
+      const inFlightLabel = createOrGetLabel(inFlightOrderId);
+      run("UPDATE parcels SET status = 'SCANNED' WHERE id = ?", [inFlightLabel.parcel.id]);
+
+      // 2. Try to scan a second parcel
+      const secondOrderId = `ORD-SECOND-${Date.now()}`;
+      run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+           VALUES (?, 'usr-cust-demo', 1499, 1200, 299, 'ON_CONVEYOR', 'PAID', 'Delhi', ?, ?)`, [secondOrderId, now, now]);
+      const secondLabel = createOrGetLabel(secondOrderId);
+
+      const res = processScan({
+        payload: secondLabel.labelPayload,
+        source: 'browser_camera'
+      });
+
+      expect(res.result).toBe('BUSY');
+      expect(res.message).toMatch(/pipeline busy/i);
+    });
+
+    it('returns WRONG_STATE when order is in DELIVERED status', () => {
+      run("UPDATE parcels SET status = 'DONE_TEST' WHERE status IN ('SCANNED', 'AT_PICK_POINT', 'SORTING')");
+      const orderId = `ORD-WRONG-STATE-${Date.now()}`;
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+      run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+           VALUES (?, 'usr-cust-demo', 999, 800, 199, 'DELIVERED', 'PAID', 'Delhi', ?, ?)`, [orderId, now, now]);
+      const label = createOrGetLabel(orderId);
+
+      const res = processScan({
+        payload: label.labelPayload,
+        source: 'browser_camera'
+      });
+
+      expect(res.result).toBe('WRONG_STATE');
+      expect(res.state).toBe('DELIVERED');
+    });
   });
 
   describe('2.1 Category-Based Destination Bin Routing', () => {

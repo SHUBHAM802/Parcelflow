@@ -51,7 +51,9 @@ function doSave() {
       try {
         fs.copyFileSync(DB_FILE, bakFile);
       } catch (bakErr) {
-        console.warn('[ParcelFlow] Warning: could not create .bak:', bakErr);
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn('[ParcelFlow] Warning: could not create .bak:', bakErr);
+        }
       }
     }
 

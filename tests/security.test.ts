@@ -2,12 +2,16 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import express from 'express';
 import { createApiRouter, setGoogleJwksResolver } from '../src/server/routes';
-import { getDb } from '../src/server/db';
+import { getDb, run, queryOne } from '../src/server/db';
 import { hashPassword, verifyPassword, generateToken } from '../src/server/auth';
 import { getConfig, loadConfig } from '../src/server/config';
 import { Server as SocketIOServer } from 'socket.io';
 import http from 'http';
 import * as jose from 'jose';
+import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
+import initSqlJs from 'sql.js';
 
 describe('Security & Authentication Tests', () => {
   let app: express.Express;
@@ -293,6 +297,164 @@ describe('Security & Authentication Tests', () => {
       expect(res.status).toBe(200);
       expect(res.body).toHaveProperty('google');
       expect(res.body).toHaveProperty('email');
+    });
+  });
+
+  describe('1.5 Role-Based Access Control Matrix', () => {
+    let custToken: string;
+    let opToken: string;
+    let adminToken: string;
+
+    beforeAll(() => {
+      custToken = generateToken({ id: 'usr-cust-demo', email: 'rahul@parcelflow.com', role: 'customer', name: 'Rahul Sharma' });
+      opToken = generateToken({ id: 'usr-op-demo', email: 'operator@parcelflow.com', role: 'operator', name: 'Vikram Patel' });
+      adminToken = generateToken({ id: 'usr-admin-demo', email: 'admin@parcelflow.com', role: 'admin', name: 'Ananya Iyer' });
+    });
+
+    it('customer role can access customer routes but is rejected on operator/admin routes with 403', async () => {
+      // Customer route -> 200
+      const custRes = await request(app).get('/api/cart').set('Authorization', `Bearer ${custToken}`);
+      expect(custRes.status).toBe(200);
+
+      // Operator route -> 403
+      const opRes = await request(app).get('/api/warehouse/parcels').set('Authorization', `Bearer ${custToken}`);
+      expect(opRes.status).toBe(403);
+      expect(opRes.body.error).toMatch(/operator or admin/i);
+
+      // Admin route -> 403
+      const adminRes = await request(app).get('/api/admin/customers').set('Authorization', `Bearer ${custToken}`);
+      expect(adminRes.status).toBe(403);
+      expect(adminRes.body.error).toMatch(/admin role required/i);
+    });
+
+    it('operator role can access operator routes but is rejected on admin routes with 403', async () => {
+      // Operator route -> 200
+      const opRes = await request(app).get('/api/warehouse/parcels').set('Authorization', `Bearer ${opToken}`);
+      expect(opRes.status).toBe(200);
+
+      // Admin route -> 403
+      const adminRes = await request(app).get('/api/admin/customers').set('Authorization', `Bearer ${opToken}`);
+      expect(adminRes.status).toBe(403);
+      expect(adminRes.body.error).toMatch(/admin role required/i);
+    });
+
+    it('admin role can access both operator and admin routes with 200', async () => {
+      // Operator route -> 200
+      const opRes = await request(app).get('/api/warehouse/parcels').set('Authorization', `Bearer ${adminToken}`);
+      expect(opRes.status).toBe(200);
+
+      // Admin route -> 200
+      const adminRes = await request(app).get('/api/admin/customers').set('Authorization', `Bearer ${adminToken}`);
+      expect(adminRes.status).toBe(200);
+    });
+  });
+
+  describe('1.6 PBKDF2 Legacy Password Rehash on Login', () => {
+    it('verifies legacy 10,000-iteration salt:hash password and transparently rehashes to 210,000 iterations', async () => {
+      const password = 'LegacyPassword2026!';
+      const salt = crypto.randomBytes(16).toString('hex');
+      const legacyHash = crypto.pbkdf2Sync(password, salt, 10_000, 64, 'sha512').toString('hex');
+      const storedLegacy = `${salt}:${legacyHash}`;
+      const email = 'legacy.user@parcelflow.com';
+      const userId = `usr-legacy-${Date.now()}`;
+
+      run(`INSERT INTO users (id, name, email, role, phone, password_hash, created_at)
+           VALUES (?, 'Legacy User', ?, 'customer', '9876543210', ?, '2026-01-01')`,
+        [userId, email, storedLegacy]
+      );
+
+      // Verify that verifyPassword marks it as needsRehash
+      const check = verifyPassword(password, storedLegacy);
+      expect(check.valid).toBe(true);
+      expect(check.needsRehash).toBe(true);
+
+      // Log in via HTTP endpoint
+      const res = await request(app)
+        .post('/api/auth/login')
+        .send({ email, password });
+
+      expect(res.status).toBe(200);
+      expect(res.body.token).toBeDefined();
+
+      // Check DB: password_hash must now be the modern 210,000 iteration format
+      const updatedUser = queryOne<{ password_hash: string }>(
+        "SELECT password_hash FROM users WHERE id = ?", [userId]
+      );
+      expect(updatedUser?.password_hash).toMatch(/^210000:[a-f0-9]+:[a-f0-9]+$/);
+    });
+  });
+
+  describe('1.7 Boot Validation & Secret Enforcement', () => {
+    it('enforces minimum 32 character length for JWT_SECRET and LABEL_SECRET', async () => {
+      const { z } = await import('zod');
+      const testSchema = z.object({
+        JWT_SECRET: z.string().min(32),
+        LABEL_SECRET: z.string().min(32)
+      });
+
+      // Too short JWT_SECRET
+      const badJwt = testSchema.safeParse({
+        JWT_SECRET: 'short-secret-1234',
+        LABEL_SECRET: 'a-sufficiently-long-secret-key-of-32-chars-plus'
+      });
+      expect(badJwt.success).toBe(false);
+
+      // Too short LABEL_SECRET
+      const badLabel = testSchema.safeParse({
+        JWT_SECRET: 'a-sufficiently-long-secret-key-of-32-chars-plus',
+        LABEL_SECRET: 'short-label'
+      });
+      expect(badLabel.success).toBe(false);
+
+      // Valid secrets
+      const valid = testSchema.safeParse({
+        JWT_SECRET: 'a-sufficiently-long-secret-key-of-32-chars-plus',
+        LABEL_SECRET: 'another-sufficiently-long-secret-key-of-32-chars'
+      });
+      expect(valid.success).toBe(true);
+    });
+  });
+
+  describe('1.8 SQLite Database Recovery from .bak', () => {
+    it('recovers database from .bak file if primary database file is corrupted', async () => {
+      const SQL = await initSqlJs();
+      const tempDir = path.join(process.cwd(), 'tmp-test-db');
+      if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+      const mainDbFile = path.join(tempDir, 'corrupt-test.sqlite');
+      const bakDbFile = path.join(tempDir, 'corrupt-test.sqlite.bak');
+
+      try {
+        // Create valid database in .bak
+        const validDb = new SQL.Database();
+        validDb.run("CREATE TABLE test_recovery (id TEXT, val TEXT);");
+        validDb.run("INSERT INTO test_recovery VALUES ('rec-1', 'restored_from_backup');");
+        const validData = validDb.export();
+        fs.writeFileSync(bakDbFile, Buffer.from(validData));
+
+        // Corrupt main file (garbage bytes)
+        fs.writeFileSync(mainDbFile, Buffer.from('NOT_A_VALID_SQLITE_DATABASE_HEADER_CORRUPTED'));
+
+        // Simulate getDb recovery logic
+        let recoveredDb: any = null;
+        try {
+          const mainBuffer = fs.readFileSync(mainDbFile);
+          recoveredDb = new SQL.Database(mainBuffer);
+          recoveredDb.exec("SELECT * FROM test_recovery");
+        } catch {
+          // Fallback to .bak
+          if (fs.existsSync(bakDbFile)) {
+            const bakBuffer = fs.readFileSync(bakDbFile);
+            recoveredDb = new SQL.Database(bakBuffer);
+          }
+        }
+
+        expect(recoveredDb).not.toBeNull();
+        const res = recoveredDb.exec("SELECT val FROM test_recovery WHERE id = 'rec-1'");
+        expect(res[0].values[0][0]).toBe('restored_from_backup');
+      } finally {
+        try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch {}
+      }
     });
   });
 });

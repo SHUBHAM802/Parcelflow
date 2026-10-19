@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll } from 'vitest';
 import { getDb, queryOne, run } from '../src/server/db';
-import { loadConfig } from '../src/server/config';
+import { loadConfig, getConfig } from '../src/server/config';
 import {
   handleIrEvent,
   getDesiredConveyorState,
@@ -15,7 +15,8 @@ import {
   resetIrSensorHistory,
   handleScanTimeout,
   checkArmTimeouts,
-  clearScanTimeoutTimer
+  clearScanTimeoutTimer,
+  checkDeviceWatchdog
 } from '../src/server/services/hardwareService';
 import { createOrGetLabel } from '../src/server/services/labelService';
 import { processScan } from '../src/server/services/scanService';
@@ -287,7 +288,7 @@ describe('Hardware API, IR Detection & Robotic Arm Pipeline', () => {
       run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
            VALUES (?, 'usr-cust-demo', 500, 400, 100, 'ON_CONVEYOR', 'PAID', 'Delhi', ?, ?)`, [orderId, now, now]);
       run(`INSERT INTO parcels (id, order_id, label_payload, status, created_at, updated_at)
-           VALUES (?, ?, 'PF1.pcl-ack.dummy12345', 'SCANNED', ?, ?)`, [parcelId, orderId, staleTime, staleTime]);
+           VALUES (?, ?, ?, 'SCANNED', ?, ?)`, [parcelId, orderId, `PF1.${parcelId}.1234567890`, staleTime, staleTime]);
       run(`INSERT INTO hardware_commands (id, device_id, type, parcel_id, status, idempotency_key, created_at, updated_at)
            VALUES (?, 'arm-esp32', 'SORT_TO_BIN', ?, 'SENT', ?, ?, ?)`, [cmdId, parcelId, `key-${cmdId}`, staleTime, staleTime]);
 
@@ -316,7 +317,7 @@ describe('Hardware API, IR Detection & Robotic Arm Pipeline', () => {
       run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
            VALUES (?, 'usr-cust-demo', 500, 400, 100, 'ON_CONVEYOR', 'PAID', 'Delhi', ?, ?)`, [orderId, now, now]);
       run(`INSERT INTO parcels (id, order_id, label_payload, status, created_at, updated_at)
-           VALUES (?, ?, 'PF1.pcl-cmp.dummy12345', 'SORTING', ?, ?)`, [parcelId, orderId, staleTime, staleTime]);
+           VALUES (?, ?, ?, 'SORTING', ?, ?)`, [parcelId, orderId, `PF1.${parcelId}.1234567890`, staleTime, staleTime]);
       run(`INSERT INTO hardware_commands (id, device_id, type, parcel_id, status, idempotency_key, created_at, updated_at)
            VALUES (?, 'arm-esp32', 'SORT_TO_BIN', ?, 'ACKED', ?, ?, ?)`, [cmdId, parcelId, `key-${cmdId}`, staleTime, staleTime]);
 
@@ -410,6 +411,34 @@ describe('Hardware API, IR Detection & Robotic Arm Pipeline', () => {
       const comp2 = completeCommand(cmdId, 1000);
       expect(comp2.success).toBe(false);
       expect(comp2.error).toBe('Command already completed');
+    });
+
+    it('heartbeat timeout generates DEVICE_OFFLINE fault and sets conveyor to HOLD when mode is real', () => {
+      const cfg = getConfig();
+      const prevMode = cfg.HARDWARE_MODE;
+      try {
+        (cfg as any).HARDWARE_MODE = 'real';
+        setDesiredConveyor('RUN', 'Reset for heartbeat test');
+
+        // Insert an expired heartbeat
+        const staleTime = new Date(Date.now() - cfg.HEARTBEAT_TIMEOUT_MS - 5000).toISOString().replace('T', ' ').substring(0, 19);
+        run(`INSERT INTO device_heartbeats (device_id, last_seen_at) VALUES ('arm-esp32-offline-test', ?)
+             ON CONFLICT(device_id) DO UPDATE SET last_seen_at = excluded.last_seen_at`, [staleTime]);
+
+        checkDeviceWatchdog();
+
+        // Must create fault
+        const fault = queryOne<{ type: string; detail: string }>(
+          "SELECT type, detail FROM pipeline_faults WHERE type = 'DEVICE_OFFLINE' AND detail LIKE '%arm-esp32-offline-test%' LIMIT 1"
+        );
+        expect(fault).toBeDefined();
+        expect(fault?.type).toBe('DEVICE_OFFLINE');
+
+        // Conveyor must be placed in HOLD
+        expect(getDesiredConveyorState().state).toBe('HOLD');
+      } finally {
+        (cfg as any).HARDWARE_MODE = prevMode;
+      }
     });
   });
 });
