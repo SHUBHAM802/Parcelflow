@@ -1,16 +1,16 @@
 # Graph Report - parcelflow  (2026-10-19)
 
 ## Corpus Check
-- 89 files · ~77,948 words
+- 90 files · ~79,523 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 683 nodes · 1412 edges · 46 communities (29 shown, 17 thin omitted)
+- 688 nodes · 1474 edges · 43 communities (28 shown, 15 thin omitted)
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 1 edges (avg confidence: 0.95)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `fecb0434`
+- Built from commit: `e533c565`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -43,9 +43,9 @@
 - [[_COMMUNITY_Community 25|Community 25]]
 - [[_COMMUNITY_Community 26|Community 26]]
 - [[_COMMUNITY_Community 27|Community 27]]
-- [[_COMMUNITY_Community 28|Community 28]]
-- [[_COMMUNITY_Community 29|Community 29]]
 - [[_COMMUNITY_Community 30|Community 30]]
+- [[_COMMUNITY_Community 31|Community 31]]
+- [[_COMMUNITY_Community 32|Community 32]]
 - [[_COMMUNITY_Community 33|Community 33]]
 - [[_COMMUNITY_Community 34|Community 34]]
 - [[_COMMUNITY_Community 35|Community 35]]
@@ -56,9 +56,6 @@
 - [[_COMMUNITY_Community 40|Community 40]]
 - [[_COMMUNITY_Community 41|Community 41]]
 - [[_COMMUNITY_Community 42|Community 42]]
-- [[_COMMUNITY_Community 43|Community 43]]
-- [[_COMMUNITY_Community 44|Community 44]]
-- [[_COMMUNITY_Community 45|Community 45]]
 
 ## God Nodes (most connected - your core abstractions)
 1. `useToast()` - 37 edges
@@ -73,12 +70,12 @@
 10. `getDb()` - 15 edges
 
 ## Surprising Connections (you probably didn't know these)
+- `ARCHITECTURE.md (System Architecture)` --documents--> `App()`  [EXTRACTED]
+  ARCHITECTURE.md → src/App.tsx
 - `TESTING.md (Testing Guide & Test Cases)` --tests--> `LoginPage()`  [EXTRACTED]
   TESTING.md → src/portals/auth/LoginPage.tsx
 - `AGENTS.md (AI Agent & Architecture Instructions)` --governs--> `getDb()`  [EXTRACTED]
   AGENTS.md → src/server/db.ts
-- `ARCHITECTURE.md (System Architecture)` --documents--> `App()`  [EXTRACTED]
-  ARCHITECTURE.md → src/App.tsx
 - `DESIGN_SYSTEM.md (Visual Design System)` --styles--> `LoginPage()`  [EXTRACTED]
   DESIGN_SYSTEM.md → src/portals/auth/LoginPage.tsx
 - `SECURITY.md (Security & RBAC Specification)` --specifies--> `hashPassword()`  [EXTRACTED]
@@ -89,135 +86,131 @@
 - **Hardware Conveyor & Robotic Sorting Loop** — hardware_simulator_index_inithardwaresimulator, flow_hardware_automation, schema_destinations, schema_sorting_logs, server_orderstatemachine_transitionorderstatus [EXTRACTED 1.00]
 - **Customer E-Commerce Order Lifecycle** — customer_pages_customercatalog_customercatalog, customer_components_cartdrawer_cartdrawer, customer_pages_customercheckout_customercheckout, schema_orders, schema_invoices [EXTRACTED 1.00]
 
-## Communities (46 total, 17 thin omitted)
+## Communities (43 total, 15 thin omitted)
 
 ### Community 0 - "Authentication & RBAC Security"
 Cohesion: 0.05
-Nodes (97): BarcodeCannerProps, BarcodeScanner(), ScanResult, Button(), ButtonProps, CartDrawer(), CartDrawerProps, CustomerHeader() (+89 more)
+Nodes (100): AdminPortal(), AdminSidebar(), AdminSidebarProps, BarcodeCannerProps, BarcodeScanner(), ScanResult, Button(), ButtonProps (+92 more)
 
 ### Community 1 - "Fulfillment Operations & Hardware Simulation"
-Cohesion: 0.07
-Nodes (34): AdminPortal(), LoginPage(), AdminHeader(), AdminHeaderProps, OperatorHeader(), OperatorHeaderProps, StatusDotPill(), StatusDotPillProps (+26 more)
-
-### Community 2 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.05
 Nodes (45): clearScanTimeoutTimer(), handleScanTimeout(), resetIrSensorHistory(), ack1, ack2, ackRes, cfg, cmd (+37 more)
+
+### Community 2 - "Fulfillment Operations & Hardware Simulation"
+Cohesion: 0.08
+Nodes (33): simulateScan(), isSingleParcelMode(), queryOne(), computeMac(), generateLabelPayload(), generateParcelId(), LabelResult, recordLabelPrinted() (+25 more)
 
 ### Community 3 - "Customer E-Commerce Experience"
 Cohesion: 0.06
 Nodes (33): 10. Error Handling Patterns, 11. Formatting, 1. Language & Runtime, 2. File Naming, 3. Directory Structure, 4. Component Conventions, 5. TypeScript Conventions, 6. API Conventions (+25 more)
 
 ### Community 4 - "Authentication & RBAC Security"
-Cohesion: 0.08
-Nodes (30): simulateScan(), computeMac(), generateLabelPayload(), generateParcelId(), LabelResult, resolveRoutingBin(), verifyLabelPayload(), processScan() (+22 more)
+Cohesion: 0.1
+Nodes (23): LoginPage(), AdminHeader(), AdminHeaderProps, CustomerHeader(), CustomerHeaderProps, OperatorHeader(), OperatorHeaderProps, StatusDotPill() (+15 more)
 
 ### Community 5 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.07
 Nodes (29): 1. Color Palette, 2. Typography, 3. Spacing & Layout, 4. Border Radius, 5. Shadows, 6. Components, 7. Icons, 8. Animations & Transitions (+21 more)
 
 ### Community 6 - "Authentication & RBAC Security"
+Cohesion: 0.19
+Nodes (26): emergencyStop(), getMachineState(), logMachineStatus(), MachineState, pauseConveyor(), resetEmergencyStopUi(), simulateIrEvent(), startConveyor() (+18 more)
+
+### Community 7 - "Shared Design System Components"
 Cohesion: 0.07
 Nodes (27): 1. Physical Architecture & Rig Topology, 2. Device Authentication, 3.1 Device Heartbeat, 3.2 Infrared Sensor Events, 3.3 Conveyor Desired State Polling, 3.4 Hardware Command Queue (Robotic Arm), 3.5 Command Acknowledge (ACK), 3.6 Command Complete (DONE) (+19 more)
 
-### Community 7 - "Shared Design System Components"
+### Community 8 - "Module Group 8"
 Cohesion: 0.08
 Nodes (25): 1. System Overview, 2. Technology Stack, 3. Directory Structure, 4. Authentication Architecture, 5. Role-Based Access Control, 6. Database Schema, 7. Real-Time Communication (Socket.io), 8. Hardware Simulation Engine (+17 more)
 
-### Community 8 - "Module Group 8"
-Cohesion: 0.08
-Nodes (24): 10. Hardware Communication & Microcontroller Security, 11. Shipping Label Symbology & Anti-Forgery, 12. Database Integrity & Atomic Persistence, 1. Authentication, 2. Authorization (RBAC), 3. Customer Data Isolation, 4. Rate Limiting, 5. Password Reset Security (+16 more)
-
 ### Community 9 - "System Architecture & Documentation"
 Cohesion: 0.08
-Nodes (23): 1.1 Authentication Tests, 1.2 Authorization / RBAC Tests, 1.3 Customer Data Isolation Tests, 1.4 Application Feature Tests, 1.5 Route Protection Tests, 1.6 Error State Tests, 1. Test Coverage Requirements, 2.1 Authentication Flow (+15 more)
+Nodes (24): 10. Hardware Communication & Microcontroller Security, 11. Shipping Label Symbology & Anti-Forgery, 12. Database Integrity & Atomic Persistence, 1. Authentication, 2. Authorization (RBAC), 3. Customer Data Isolation, 4. Rate Limiting, 5. Password Reset Security (+16 more)
 
 ### Community 10 - "System Architecture & Documentation"
 Cohesion: 0.08
 Nodes (22): setGoogleJwksResolver(), badJwt, badLabel, bakBuffer, bakDbFile, cfg, check, hash (+14 more)
 
 ### Community 11 - "Authentication & RBAC Security"
+Cohesion: 0.19
+Nodes (21): ARCHITECTURE.md (System Architecture), initHardwareSimulator(), simulateFault(), stopSimulatorIntervals(), config, startServer(), hashPassword(), applyPragmasAndIndexes() (+13 more)
+
+### Community 12 - "Module Group 12"
+Cohesion: 0.08
+Nodes (23): 1.1 Authentication Tests, 1.2 Authorization / RBAC Tests, 1.3 Customer Data Isolation Tests, 1.4 Application Feature Tests, 1.5 Route Protection Tests, 1.6 Error State Tests, 1. Test Coverage Requirements, 2.1 Authentication Flow (+15 more)
+
+### Community 13 - "Module Group 13"
 Cohesion: 0.09
 Nodes (22): 1. Customer Storefront (`/customer`), 1. Install Dependencies, 2. Environment Configuration, 2. Warehouse Operator Control Room (`/operator`), 3. Admin Business Center (`/admin`), 3. Run Development Server, Architecture & Portals, code:bash (npm install) (+14 more)
 
-### Community 12 - "Module Group 12"
+### Community 14 - "Executive Business Administration & Analytics"
 Cohesion: 0.09
 Nodes (21): 10. Graphify Codebase Knowledge Graph, 1. Critical Rules, 2. Architecture Quick Reference, 3. Adding a New API Endpoint, 4. Adding a New Page to a Portal, 5. Adding a New Database Table, 6. Existing Role Authorization, 7. Key Files to Read Before Making Changes (+13 more)
 
-### Community 13 - "Module Group 13"
-Cohesion: 0.22
-Nodes (19): MachineState, query(), queryOne(), transaction(), GOOGLE_JWKS, acknowledgeCommand(), checkArmTimeouts(), checkDeviceWatchdog() (+11 more)
+### Community 15 - "Customer E-Commerce Experience"
+Cohesion: 0.14
+Nodes (16): OperatorSidebar(), OperatorSidebarProps, getSocket(), initSocket(), OperatorConveyorProps, ClientToServerEvents, DeviceHeartbeatRecord, PipelineSnapshot (+8 more)
 
-### Community 14 - "Executive Business Administration & Analytics"
+### Community 16 - "Customer E-Commerce Experience"
 Cohesion: 0.11
 Nodes (17): 1. Product Overview, 2. Problem Statement, 3. Goal, 4. Target Users, 5.1 Authentication & Authorization, 5.2 Customer Portal, 5.3 Warehouse / Operator Portal, 5.4 Administrator Portal (+9 more)
 
-### Community 15 - "Customer E-Commerce Experience"
-Cohesion: 0.29
-Nodes (15): hashPassword(), applyPragmasAndIndexes(), DB_FILE, doSave(), ensureMigrationsTable(), flushSave(), getDb(), hasMigration() (+7 more)
-
-### Community 16 - "Customer E-Commerce Experience"
-Cohesion: 0.24
-Nodes (15): emergencyStop(), getMachineState(), logMachineStatus(), pauseConveyor(), processNextOrder(), resetEmergencyStopUi(), simulateIrEvent(), sleep() (+7 more)
-
 ### Community 17 - "Customer E-Commerce Experience"
-Cohesion: 0.2
-Nodes (13): initHardwareSimulator(), simulateFault(), stopSimulatorIntervals(), config, startServer(), requireDeviceToken(), EnvConfig, envSchema (+5 more)
-
-### Community 18 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.18
 Nodes (10): AuthenticatedRequest, base64UrlDecode(), extractUserFromRequest(), hardwareAttempts, loginAttempts, RateLimitRecord, requireAuth(), scanAttempts (+2 more)
 
+### Community 18 - "Fulfillment Operations & Hardware Simulation"
+Cohesion: 0.2
+Nodes (11): SECURITY.md (Security & RBAC Specification), TESTING.md (Testing Guide & Test Cases), Firebase Google OAuth Flow (/auth/google), Role-Based Access Control (RBAC), addresses (Database Table), users (Database Table), base64UrlEncode(), generateToken() (+3 more)
+
 ### Community 19 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.25
-Nodes (7): 1. Firebase Console Setup, 2. Obtain Client & Server Config, 3. Verify Server Startup, code:env (# Server token verification (RS256 verified against Google's), code:bash (npm run dev), code:block3 ([ParcelFlow] Google login: enabled (project: your-firebase-p), Enabling Google Sign-In with Firebase Authentication
+Nodes (10): requireDeviceToken(), EnvConfig, envSchema, getConfig(), isGoogleLoginAvailable(), isHardwareApiEnabled(), loadConfig(), query() (+2 more)
 
 ### Community 20 - "Fulfillment Operations & Hardware Simulation"
+Cohesion: 0.22
+Nodes (9): AGENTS.md (AI Agent & Architecture Instructions), processNextOrder(), sleep(), updateOrderStatus(), order_status_history (Database Table), isValidTransition(), OrderStatus, transitionOrderStatus() (+1 more)
+
+### Community 21 - "Authentication & RBAC Security"
 Cohesion: 0.25
 Nodes (8): PRD.md (Product Requirements Document), Admin Business Center (Analytics->Inventory->Ledger->Destinations), Customer Storefront Flow (Catalog->Cart->Checkout->Orders), Automated Hardware Simulation (IR->Camera->RoboticArm->Sort), Operator Warehouse Flow (Queue->Pick->Pack->Infeed), destinations (Database Table), orders (Database Table), sorting_logs (Database Table)
 
-### Community 21 - "Authentication & RBAC Security"
-Cohesion: 0.33
-Nodes (6): AGENTS.md (AI Agent & Architecture Instructions), order_status_history (Database Table), isValidTransition(), OrderStatus, transitionOrderStatus(), VALID_TRANSITIONS
-
 ### Community 22 - "Community 22"
-Cohesion: 0.29
-Nodes (6): 1. Routing Model Overview, 2. Default Bin Allocation Table, 3. Mixed-Category Order Resolution Rule, 4. Administrative Dynamic Reconfiguration, Authoritative Resolution Hierarchy:, ParcelFlow Bin Routing Architecture & Category Rules
+Cohesion: 0.25
+Nodes (7): 1. Firebase Console Setup, 2. Obtain Client & Server Config, 3. Verify Server Startup, code:env (# Server token verification (RS256 verified against Google's), code:bash (npm run dev), code:block3 ([ParcelFlow] Google login: enabled (project: your-firebase-p), Enabling Google Sign-In with Firebase Authentication
 
 ### Community 23 - "Community 23"
 Cohesion: 0.29
-Nodes (7): ARCHITECTURE.md (System Architecture), addresses (Database Table), users (Database Table), loginRateLimiter(), verifyPassword(), createApiRouter(), App()
+Nodes (6): 1. Routing Model Overview, 2. Default Bin Allocation Table, 3. Mixed-Category Order Resolution Rule, 4. Administrative Dynamic Reconfiguration, Authoritative Resolution Hierarchy:, ParcelFlow Bin Routing Architecture & Category Rules
 
 ### Community 24 - "Community 24"
 Cohesion: 0.4
 Nodes (3): Skeleton(), Column, TableProps
 
 ### Community 25 - "Community 25"
-Cohesion: 0.33
-Nodes (6): SECURITY.md (Security & RBAC Specification), TESTING.md (Testing Guide & Test Cases), Firebase Google OAuth Flow (/auth/google), Role-Based Access Control (RBAC), base64UrlEncode(), generateToken()
-
-### Community 26 - "Community 26"
 Cohesion: 0.4
 Nodes (4): Additional observations, Confirmed Findings, ParcelFlow Security & Code Audit, Remediation Plan
 
 ## Knowledge Gaps
-- **338 isolated node(s):** `config`, `OrderStatus`, `PaymentStatus`, `PickingTask`, `PackingTask` (+333 more)
+- **341 isolated node(s):** `config`, `OrderStatus`, `PaymentStatus`, `PickingTask`, `PackingTask` (+336 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **17 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **15 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `apiFetch()` connect `Authentication & RBAC Security` to `Fulfillment Operations & Hardware Simulation`, `Community 23`?**
-  _High betweenness centrality (0.045) - this node is a cross-community bridge._
-- **Why does `createApiRouter()` connect `Community 23` to `Authentication & RBAC Security`, `System Architecture & Documentation`, `Module Group 13`, `Customer E-Commerce Experience`, `Community 25`?**
+- **Why does `apiFetch()` connect `Authentication & RBAC Security` to `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`, `Customer E-Commerce Experience`?**
+  _High betweenness centrality (0.043) - this node is a cross-community bridge._
+- **Why does `createApiRouter()` connect `Fulfillment Operations & Hardware Simulation` to `Authentication & RBAC Security`, `System Architecture & Documentation`, `Authentication & RBAC Security`, `Authentication & RBAC Security`?**
   _High betweenness centrality (0.042) - this node is a cross-community bridge._
-- **Why does `run()` connect `Customer E-Commerce Experience` to `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`, `System Architecture & Documentation`, `Module Group 13`, `Customer E-Commerce Experience`, `Customer E-Commerce Experience`, `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`?**
+- **Why does `run()` connect `Authentication & RBAC Security` to `Fulfillment Operations & Hardware Simulation`, `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`, `System Architecture & Documentation`, `Customer E-Commerce Experience`, `Fulfillment Operations & Hardware Simulation`, `Fulfillment Operations & Hardware Simulation`?**
   _High betweenness centrality (0.019) - this node is a cross-community bridge._
 - **What connects `config`, `OrderStatus`, `PaymentStatus` to the rest of the system?**
-  _338 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _341 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `Authentication & RBAC Security` be split into smaller, more focused modules?**
   _Cohesion score 0.05 - nodes in this community are weakly interconnected._
 - **Should `Fulfillment Operations & Hardware Simulation` be split into smaller, more focused modules?**
-  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
-- **Should `Fulfillment Operations & Hardware Simulation` be split into smaller, more focused modules?**
   _Cohesion score 0.05 - nodes in this community are weakly interconnected._
+- **Should `Fulfillment Operations & Hardware Simulation` be split into smaller, more focused modules?**
+  _Cohesion score 0.08 - nodes in this community are weakly interconnected._
