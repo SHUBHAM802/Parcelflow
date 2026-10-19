@@ -299,10 +299,17 @@ export function getNextCommandForDevice(deviceId: string) {
       }
     }
 
+    let orderId: string | null = null;
+    if (cmd.parcel_id) {
+      const p = queryOne<{ order_id: string }>("SELECT order_id FROM parcels WHERE id = ?", [cmd.parcel_id]);
+      if (p) orderId = p.order_id;
+    }
+
     return {
       commandId: cmd.id,
       type: cmd.type,
       parcelId: cmd.parcel_id,
+      orderId,
       bin,
       servoPreset,
       expiresAt: new Date(Date.now() + 20000).toISOString()

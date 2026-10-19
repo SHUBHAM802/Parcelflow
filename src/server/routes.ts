@@ -33,6 +33,8 @@ import {
   resetEmergencyStop,
   getPipelineSnapshot
 } from './services/hardwareService';
+import { createOrGetLabel, recordLabelPrinted } from './services/labelService';
+import { processScan } from './services/scanService';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Server as SocketIOServer } from 'socket.io';
 
@@ -1494,7 +1496,6 @@ export function createApiRouter(io: SocketIOServer) {
     }
 
     try {
-      const { createOrGetLabel } = require('./services/labelService');
       const result = createOrGetLabel(orderId);
       return res.json({
         success: true,
@@ -1513,7 +1514,6 @@ export function createApiRouter(io: SocketIOServer) {
     if (!parcelId) return res.status(400).json({ error: 'parcelId is required' });
 
     try {
-      const { recordLabelPrinted } = require('./services/labelService');
       recordLabelPrinted(parcelId);
       return res.json({ success: true });
     } catch (err: any) {
@@ -1558,7 +1558,6 @@ export function createApiRouter(io: SocketIOServer) {
     if (!payload) return res.status(400).json({ error: 'payload is required' });
 
     try {
-      const { processScan } = require('./services/scanService');
       const result = processScan({
         payload: String(payload),
         source: source || 'browser_camera',
@@ -1689,7 +1688,6 @@ export function createApiRouter(io: SocketIOServer) {
     if (orderIds.length > 12) {
       return res.status(400).json({ error: 'Batch size limited to 12 labels' });
     }
-    const { createOrGetLabel } = require('./services/labelService');
     const results = [];
     for (const oid of orderIds) {
       try {
@@ -1730,7 +1728,6 @@ export function createApiRouter(io: SocketIOServer) {
       `, [`hist-${Date.now()}`, orderId, req.user?.id || 'operator', now]);
     });
 
-    const { createOrGetLabel } = require('./services/labelService');
     const labelData = createOrGetLabel(orderId);
 
     return res.json({

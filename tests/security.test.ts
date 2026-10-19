@@ -28,8 +28,8 @@ describe('Security & Authentication Tests', () => {
   });
 
   describe('1.1 Google Sign-In Hardening', () => {
-    let privateKey: jose.KeyLike;
-    let publicKey: jose.KeyLike;
+    let privateKey: any;
+    let publicKey: any;
     const testProjectId = 'test-firebase-project';
 
     beforeAll(async () => {
@@ -56,7 +56,7 @@ describe('Security & Authentication Tests', () => {
       exp?: string | number;
       issuer?: string;
       audience?: string;
-      key?: jose.KeyLike;
+      key?: any;
     } = {}) {
       if (options.alg === 'none') {
         const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url');

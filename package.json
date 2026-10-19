@@ -12,6 +12,7 @@
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "seed": "tsx -e \"import('./src/server/db.js').then(m => m.getDb()).then(() => console.log('Database initialized and seeded.'))\"",
     "sim:real-check": "node scripts/e2e-happy-path.cjs"
   },
   "dependencies": {
