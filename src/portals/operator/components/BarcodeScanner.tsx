@@ -48,9 +48,14 @@ export const BarcodeScanner: React.FC<BarcodeCannerProps> = ({
     readerRef.current = new BrowserQRCodeReader();
 
     // Enumerate cameras
+    if (!navigator?.mediaDevices?.enumerateDevices) {
+      setError('Camera API is not supported in this browser. Use manual entry below.');
+      return;
+    }
+
     BrowserQRCodeReader.listVideoInputDevices().then(devs => {
       setDevices(devs);
-      if (devs.length > 0) {
+      if (devs && devs.length > 0) {
         // Prefer rear camera
         const rear = devs.find(d =>
           d.label.toLowerCase().includes('back') ||
@@ -58,10 +63,12 @@ export const BarcodeScanner: React.FC<BarcodeCannerProps> = ({
           d.label.toLowerCase().includes('environment')
         );
         setSelectedDevice(rear?.deviceId || devs[0].deviceId);
+      } else {
+        setError('No camera found. Connect a webcam or use manual entry below.');
       }
     }).catch(err => {
       console.warn('[Scanner] Failed to list cameras:', err);
-      setError('No cameras found. Use manual entry below.');
+      setError('No camera found. Connect a webcam or use manual entry below.');
     });
 
     return () => {
@@ -182,16 +189,25 @@ export const BarcodeScanner: React.FC<BarcodeCannerProps> = ({
         />
 
         {!isActive && !isLoading && (
-          <div className="flex flex-col items-center justify-center py-16 text-zinc-500 space-y-3">
-            <CameraOff className="w-10 h-10 stroke-1" />
-            <p className="text-xs">Camera not active</p>
+          <div className="flex flex-col items-center justify-center py-16 px-4 text-center text-zinc-500 space-y-3">
+            <CameraOff className={`w-10 h-10 ${devices.length === 0 ? 'text-amber-500/80' : 'text-zinc-500'} stroke-1`} />
+            <div className="space-y-1">
+              <p className="text-xs font-semibold text-zinc-300">
+                {devices.length === 0 ? 'No camera found' : 'Camera not active'}
+              </p>
+              <p className="text-[11px] text-zinc-500 max-w-xs">
+                {devices.length === 0
+                  ? 'No physical webcam detected. Connect a camera or use manual barcode entry below.'
+                  : 'Click below to start the camera viewfinder'}
+              </p>
+            </div>
             <Button
-              variant="teal"
+              variant={devices.length === 0 ? 'secondary' : 'teal'}
               size="sm"
               onClick={startScanning}
               icon={<Camera className="w-3.5 h-3.5" />}
             >
-              Start Camera
+              {devices.length === 0 ? 'Retry Camera Detection' : 'Start Camera'}
             </Button>
           </div>
         )}
