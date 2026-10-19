@@ -3,6 +3,7 @@ import { query, queryOne, run, transaction } from '../db';
 import { getConfig, isSingleParcelMode } from '../config';
 import { verifyLabelPayload, resolveRoutingBin } from './labelService';
 import { transitionOrderStatus } from '../orderStateMachine';
+import { clearScanTimeoutTimer } from './hardwareService';
 import { Server as SocketIOServer } from 'socket.io';
 
 export type ScanResult =
@@ -204,6 +205,7 @@ export function processScan(req: ScanRequest, io?: SocketIOServer | null): ScanR
     run("UPDATE pipeline_state SET value = CAST(CAST(value AS INTEGER) + 1 AS TEXT), updated_at = ? WHERE key = 'conveyor_revision'", [now]);
 
     writeScanEvent('ACCEPTED', parcelId);
+    clearScanTimeoutTimer();
     recentBadScans = []; // Reset bad scan counter
 
     // Emit socket events

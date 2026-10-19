@@ -11,8 +11,51 @@ import { machineState } from '../hardware-simulator';
 const lastIrEvents: Record<string, { state: string; ts: number; seq: number }> = {};
 let currentIr1State: 'IDLE' | 'ACTIVE' = 'IDLE';
 let currentIr2State: 'IDLE' | 'ACTIVE' = 'IDLE';
+let activeScanTimeoutTimer: NodeJS.Timeout | null = null;
+let scanTimeoutPending = false;
+
+export function clearScanTimeoutTimer() {
+  if (activeScanTimeoutTimer) {
+    clearTimeout(activeScanTimeoutTimer);
+    activeScanTimeoutTimer = null;
+  }
+  scanTimeoutPending = false;
+}
+
+export function handleScanTimeout(io?: SocketIOServer | null) {
+  clearScanTimeoutTimer();
+  const cfg = getConfig();
+  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const faultId = `fault-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+
+  run(
+    "INSERT INTO pipeline_faults (id, type, detail, created_at) VALUES (?, 'SCAN_TIMEOUT', ?, ?)",
+    [faultId, `Optical scan timeout: no valid QR barcode detected within ${cfg.SCAN_TIMEOUT_MS}ms`, now]
+  );
+
+  if (cfg.SCAN_REJECT_POLICY === 'stop') {
+    setDesiredConveyor('HOLD', 'Scan timeout — conveyor stopped by reject policy', io);
+  } else {
+    setDesiredConveyor('RUN', 'Scan timeout — conveyor resumed by reject policy', io);
+  }
+
+  if (io) {
+    io.emit('fault:created', {
+      id: faultId,
+      type: 'SCAN_TIMEOUT',
+      parcel_id: null,
+      detail: `Optical scan timeout (${cfg.SCAN_REJECT_POLICY})`,
+      created_at: now,
+      acked_at: null,
+      acked_by: null
+    });
+  }
+
+  return { success: true, faultId, policy: cfg.SCAN_REJECT_POLICY };
+}
 
 export function resetIrSensorHistory() {
+  clearScanTimeoutTimer();
   for (const k of Object.keys(lastIrEvents)) {
     delete lastIrEvents[k];
   }
@@ -104,10 +147,20 @@ export function handleIrEvent(payload: IrEventPayload, io?: SocketIOServer | nul
   // Handle sensor logic
   if (payload.sensorId === 'IR1') {
     if (payload.state === 'TRIGGERED') {
+      clearScanTimeoutTimer();
+      scanTimeoutPending = true;
+
       if (cfg.SCAN_MODE === 'stop_and_scan') {
         // Stop belt to allow clean scan without motion blur
         setDesiredConveyor('HOLD', 'IR1 triggered (stop_and_scan window opened)', io);
       }
+
+      activeScanTimeoutTimer = setTimeout(() => {
+        if (scanTimeoutPending) {
+          handleScanTimeout(io);
+        }
+      }, cfg.SCAN_TIMEOUT_MS);
+
       if (io) io.emit('sensor:triggered', { sensorId: 'IR1' });
     }
     return { success: true };
@@ -263,8 +316,17 @@ export function getNextCommandForDevice(deviceId: string) {
 export function acknowledgeCommand(commandId: string, io?: SocketIOServer | null) {
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   return transaction(() => {
-    const cmd = queryOne<{ id: string; parcel_id: string }>("SELECT id, parcel_id FROM hardware_commands WHERE id = ?", [commandId]);
+    const cmd = queryOne<{ id: string; parcel_id: string; status: string }>("SELECT id, parcel_id, status FROM hardware_commands WHERE id = ?", [commandId]);
     if (!cmd) return { success: false, error: 'Command not found' };
+    if (cmd.status === 'ACKED') {
+      return { success: false, error: 'Command already acknowledged' };
+    }
+    if (cmd.status === 'DONE') {
+      return { success: false, error: 'Command already completed' };
+    }
+    if (cmd.status === 'FAILED') {
+      return { success: false, error: 'Command already failed' };
+    }
 
     run("UPDATE hardware_commands SET status = 'ACKED', updated_at = ? WHERE id = ?", [now, commandId]);
 
@@ -286,10 +348,16 @@ export function acknowledgeCommand(commandId: string, io?: SocketIOServer | null
 export function completeCommand(commandId: string, durationMs: number = 2000, io?: SocketIOServer | null) {
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   return transaction(() => {
-    const cmd = queryOne<{ id: string; parcel_id: string; bin_id: string }>(
-      "SELECT id, parcel_id, bin_id FROM hardware_commands WHERE id = ?", [commandId]
+    const cmd = queryOne<{ id: string; parcel_id: string; bin_id: string; status: string }>(
+      "SELECT id, parcel_id, bin_id, status FROM hardware_commands WHERE id = ?", [commandId]
     );
     if (!cmd) return { success: false, error: 'Command not found' };
+    if (cmd.status === 'DONE') {
+      return { success: false, error: 'Command already completed' };
+    }
+    if (cmd.status === 'FAILED') {
+      return { success: false, error: 'Command already failed' };
+    }
 
     // Update command
     run("UPDATE hardware_commands SET status = 'DONE', completed_at = ?, updated_at = ? WHERE id = ?", [now, now, commandId]);
@@ -519,9 +587,100 @@ export function getPipelineSnapshot(): PipelineSnapshot {
 }
 
 /**
- * Watchdog timer check: flags offline devices and sets conveyor to HOLD.
+ * Check timeouts on arm commands:
+ * - SENT commands exceeding ARM_ACK_TIMEOUT_MS without ACK
+ * - ACKED commands exceeding ARM_COMPLETE_TIMEOUT_MS without COMPLETE
+ */
+export function checkArmTimeouts(io?: SocketIOServer | null) {
+  const cfg = getConfig();
+  const nowMs = Date.now();
+  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  const timedOutResults: { commandId: string; type: string }[] = [];
+
+  // 1. Check SENT commands waiting for ACK
+  const ackCutoff = new Date(nowMs - cfg.ARM_ACK_TIMEOUT_MS).toISOString().replace('T', ' ').substring(0, 19);
+  const pendingAck = query<{ id: string; parcel_id: string; updated_at: string }>(
+    "SELECT id, parcel_id, updated_at FROM hardware_commands WHERE status = 'SENT' AND updated_at < ?",
+    [ackCutoff]
+  );
+
+  for (const cmd of pendingAck) {
+    transaction(() => {
+      run(
+        "UPDATE hardware_commands SET status = 'FAILED', failure_reason = 'ARM_ACK_TIMEOUT', completed_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, cmd.id]
+      );
+      if (cmd.parcel_id) {
+        run("UPDATE parcels SET status = 'FAILED', updated_at = ? WHERE id = ?", [now, cmd.parcel_id]);
+      }
+      const faultId = `fault-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      run(
+        "INSERT INTO pipeline_faults (id, type, parcel_id, detail, created_at) VALUES (?, 'ARM_TIMEOUT', ?, ?, ?)",
+        [faultId, cmd.parcel_id || null, `Arm failed to acknowledge command ${cmd.id} within ${cfg.ARM_ACK_TIMEOUT_MS}ms`, now]
+      );
+      setDesiredConveyor('HOLD', 'Arm ACK timeout', io);
+      if (io) {
+        io.emit('fault:created', {
+          id: faultId,
+          type: 'ARM_TIMEOUT',
+          parcel_id: cmd.parcel_id || null,
+          detail: `Arm ACK timeout on command ${cmd.id}`,
+          created_at: now,
+          acked_at: null,
+          acked_by: null
+        });
+      }
+      timedOutResults.push({ commandId: cmd.id, type: 'ARM_ACK_TIMEOUT' });
+    });
+  }
+
+  // 2. Check ACKED commands waiting for COMPLETE
+  const completeCutoff = new Date(nowMs - cfg.ARM_COMPLETE_TIMEOUT_MS).toISOString().replace('T', ' ').substring(0, 19);
+  const pendingComplete = query<{ id: string; parcel_id: string; updated_at: string }>(
+    "SELECT id, parcel_id, updated_at FROM hardware_commands WHERE status = 'ACKED' AND updated_at < ?",
+    [completeCutoff]
+  );
+
+  for (const cmd of pendingComplete) {
+    transaction(() => {
+      run(
+        "UPDATE hardware_commands SET status = 'FAILED', failure_reason = 'ARM_COMPLETE_TIMEOUT', completed_at = ?, updated_at = ? WHERE id = ?",
+        [now, now, cmd.id]
+      );
+      if (cmd.parcel_id) {
+        run("UPDATE parcels SET status = 'FAILED', updated_at = ? WHERE id = ?", [now, cmd.parcel_id]);
+      }
+      const faultId = `fault-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
+      run(
+        "INSERT INTO pipeline_faults (id, type, parcel_id, detail, created_at) VALUES (?, 'ARM_TIMEOUT', ?, ?, ?)",
+        [faultId, cmd.parcel_id || null, `Arm failed to complete command ${cmd.id} within ${cfg.ARM_COMPLETE_TIMEOUT_MS}ms`, now]
+      );
+      setDesiredConveyor('HOLD', 'Arm COMPLETE timeout', io);
+      if (io) {
+        io.emit('fault:created', {
+          id: faultId,
+          type: 'ARM_TIMEOUT',
+          parcel_id: cmd.parcel_id || null,
+          detail: `Arm COMPLETE timeout on command ${cmd.id}`,
+          created_at: now,
+          acked_at: null,
+          acked_by: null
+        });
+      }
+      timedOutResults.push({ commandId: cmd.id, type: 'ARM_COMPLETE_TIMEOUT' });
+    });
+  }
+
+  return timedOutResults;
+}
+
+/**
+ * Watchdog timer check: flags offline devices and checks command timeouts.
  */
 export function checkDeviceWatchdog(io?: SocketIOServer | null) {
+  // Always verify arm timeouts
+  checkArmTimeouts(io);
+
   const cfg = getConfig();
   if (cfg.HARDWARE_MODE === 'simulator') return; // Do not flag offline in simulator mode
 
@@ -562,3 +721,4 @@ export function checkDeviceWatchdog(io?: SocketIOServer | null) {
     }
   }
 }
+

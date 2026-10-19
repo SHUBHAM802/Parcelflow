@@ -55,19 +55,31 @@ function doSave() {
       }
     }
 
-    // Atomic rename: .tmp -> main with Windows EPERM fallback
+    // Atomic rename: .tmp -> main with Windows EPERM/EBUSY fallback
     try {
       fs.renameSync(tmpFile, DB_FILE);
     } catch (renameErr: any) {
-      if ((process.platform === 'win32' || renameErr.code === 'EPERM') && fs.existsSync(tmpFile)) {
-        fs.copyFileSync(tmpFile, DB_FILE);
+      if ((process.platform === 'win32' || renameErr.code === 'EPERM' || renameErr.code === 'EBUSY') && fs.existsSync(tmpFile)) {
+        let copied = false;
+        for (let attempt = 0; attempt < 3 && !copied; attempt++) {
+          try {
+            fs.copyFileSync(tmpFile, DB_FILE);
+            copied = true;
+          } catch (copyErr: any) {
+            if (attempt === 2 && process.env.NODE_ENV !== 'test') {
+              throw copyErr;
+            }
+          }
+        }
         try { fs.unlinkSync(tmpFile); } catch {}
       } else if (!fs.existsSync(DB_FILE)) {
         throw renameErr;
       }
     }
   } catch (e) {
-    console.error('[ParcelFlow] Failed to persist database to disk:', e);
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('[ParcelFlow] Failed to persist database to disk:', e);
+    }
   }
 }
 

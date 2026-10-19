@@ -12,7 +12,10 @@ import {
   triggerEmergencyStop,
   resetEmergencyStop,
   getPipelineSnapshot,
-  resetIrSensorHistory
+  resetIrSensorHistory,
+  handleScanTimeout,
+  checkArmTimeouts,
+  clearScanTimeoutTimer
 } from '../src/server/services/hardwareService';
 import { createOrGetLabel } from '../src/server/services/labelService';
 import { processScan } from '../src/server/services/scanService';
@@ -242,6 +245,171 @@ describe('Hardware API, IR Detection & Robotic Arm Pipeline', () => {
       expect(snapshot).toHaveProperty('robotArm');
       expect(snapshot).toHaveProperty('bins');
       expect(Array.isArray(snapshot.bins)).toBe(true);
+    });
+  });
+
+  describe('5.4 Timeouts, IR Debouncing, and Fault Safety', () => {
+    it('handles IR1 trigger and scan timeout policy', () => {
+      resetIrSensorHistory();
+      setDesiredConveyor('RUN', 'Reset for test');
+
+      // 1. IR1 triggered -> conveyor moves to HOLD in stop_and_scan mode
+      const ir1Res = handleIrEvent({
+        deviceId: 'conveyor-esp32',
+        sensorId: 'IR1',
+        state: 'TRIGGERED',
+        seq: 1001,
+        ts: Date.now()
+      });
+      expect(ir1Res.success).toBe(true);
+      expect(getDesiredConveyorState().state).toBe('HOLD');
+
+      // 2. Trigger scan timeout
+      const timeoutRes = handleScanTimeout();
+      expect(timeoutRes.success).toBe(true);
+      expect(timeoutRes.faultId).toBeDefined();
+
+      // Check fault logged in DB
+      const fault = queryOne<{ type: string; detail: string }>(
+        "SELECT type, detail FROM pipeline_faults WHERE id = ?",
+        [timeoutRes.faultId]
+      );
+      expect(fault?.type).toBe('SCAN_TIMEOUT');
+    });
+
+    it('handles ARM_ACK timeout when arm does not acknowledge command within timeout', () => {
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const staleTime = new Date(Date.now() - 15000).toISOString().replace('T', ' ').substring(0, 19);
+      const orderId = `ORD-ARM-ACK-${Date.now()}`;
+      const parcelId = `pcl-ack-${Date.now()}`;
+      const cmdId = `cmd-ack-${Date.now()}`;
+
+      run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+           VALUES (?, 'usr-cust-demo', 500, 400, 100, 'ON_CONVEYOR', 'PAID', 'Delhi', ?, ?)`, [orderId, now, now]);
+      run(`INSERT INTO parcels (id, order_id, label_payload, status, created_at, updated_at)
+           VALUES (?, ?, 'PF1.pcl-ack.dummy12345', 'SCANNED', ?, ?)`, [parcelId, orderId, staleTime, staleTime]);
+      run(`INSERT INTO hardware_commands (id, device_id, type, parcel_id, status, idempotency_key, created_at, updated_at)
+           VALUES (?, 'arm-esp32', 'SORT_TO_BIN', ?, 'SENT', ?, ?, ?)`, [cmdId, parcelId, `key-${cmdId}`, staleTime, staleTime]);
+
+      const timedOut = checkArmTimeouts();
+      expect(timedOut.some(t => t.commandId === cmdId && t.type === 'ARM_ACK_TIMEOUT')).toBe(true);
+
+      const cmd = queryOne<{ status: string; failure_reason: string }>(
+        "SELECT status, failure_reason FROM hardware_commands WHERE id = ?", [cmdId]
+      );
+      expect(cmd?.status).toBe('FAILED');
+      expect(cmd?.failure_reason).toBe('ARM_ACK_TIMEOUT');
+
+      const parcel = queryOne<{ status: string }>("SELECT status FROM parcels WHERE id = ?", [parcelId]);
+      expect(parcel?.status).toBe('FAILED');
+
+      expect(getDesiredConveyorState().state).toBe('HOLD');
+    });
+
+    it('handles ARM_COMPLETE timeout when arm does not complete command within timeout', () => {
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const staleTime = new Date(Date.now() - 35000).toISOString().replace('T', ' ').substring(0, 19);
+      const orderId = `ORD-ARM-CMP-${Date.now()}`;
+      const parcelId = `pcl-cmp-${Date.now()}`;
+      const cmdId = `cmd-cmp-${Date.now()}`;
+
+      run(`INSERT INTO orders (id, customer_id, total_amount, subtotal, gst_amount, status, payment_status, destination_city, created_at, updated_at)
+           VALUES (?, 'usr-cust-demo', 500, 400, 100, 'ON_CONVEYOR', 'PAID', 'Delhi', ?, ?)`, [orderId, now, now]);
+      run(`INSERT INTO parcels (id, order_id, label_payload, status, created_at, updated_at)
+           VALUES (?, ?, 'PF1.pcl-cmp.dummy12345', 'SORTING', ?, ?)`, [parcelId, orderId, staleTime, staleTime]);
+      run(`INSERT INTO hardware_commands (id, device_id, type, parcel_id, status, idempotency_key, created_at, updated_at)
+           VALUES (?, 'arm-esp32', 'SORT_TO_BIN', ?, 'ACKED', ?, ?, ?)`, [cmdId, parcelId, `key-${cmdId}`, staleTime, staleTime]);
+
+      const timedOut = checkArmTimeouts();
+      expect(timedOut.some(t => t.commandId === cmdId && t.type === 'ARM_COMPLETE_TIMEOUT')).toBe(true);
+
+      const cmd = queryOne<{ status: string; failure_reason: string }>(
+        "SELECT status, failure_reason FROM hardware_commands WHERE id = ?", [cmdId]
+      );
+      expect(cmd?.status).toBe('FAILED');
+      expect(cmd?.failure_reason).toBe('ARM_COMPLETE_TIMEOUT');
+
+      const parcel = queryOne<{ status: string }>("SELECT status FROM parcels WHERE id = ?", [parcelId]);
+      expect(parcel?.status).toBe('FAILED');
+
+      expect(getDesiredConveyorState().state).toBe('HOLD');
+    });
+
+    it('rejects duplicate or out-of-order IR sensor events and enforces debounce window', () => {
+      resetIrSensorHistory();
+      const nowMs = Date.now();
+
+      // First trigger
+      const first = handleIrEvent({
+        deviceId: 'conveyor-esp32',
+        sensorId: 'IR1',
+        state: 'TRIGGERED',
+        seq: 500,
+        ts: nowMs
+      });
+      expect(first.success).toBe(true);
+      expect((first as any).ignored).toBeUndefined();
+
+      // Duplicate sequence
+      const dupSeq = handleIrEvent({
+        deviceId: 'conveyor-esp32',
+        sensorId: 'IR1',
+        state: 'TRIGGERED',
+        seq: 500,
+        ts: nowMs + 10
+      });
+      expect(dupSeq.success).toBe(true);
+      expect((dupSeq as any).ignored).toBe(true);
+      expect((dupSeq as any).reason).toBe('Duplicate or old sequence number');
+
+      // Older sequence
+      const oldSeq = handleIrEvent({
+        deviceId: 'conveyor-esp32',
+        sensorId: 'IR1',
+        state: 'TRIGGERED',
+        seq: 499,
+        ts: nowMs + 20
+      });
+      expect(oldSeq.success).toBe(true);
+      expect((oldSeq as any).ignored).toBe(true);
+      expect((oldSeq as any).reason).toBe('Duplicate or old sequence number');
+
+      // Higher sequence within debounce window (< 250ms)
+      const debounceActive = handleIrEvent({
+        deviceId: 'conveyor-esp32',
+        sensorId: 'IR1',
+        state: 'TRIGGERED',
+        seq: 501,
+        ts: nowMs + 50
+      });
+      expect(debounceActive.success).toBe(true);
+      expect((debounceActive as any).ignored).toBe(true);
+      expect((debounceActive as any).reason).toBe('Debounce window active');
+    });
+
+    it('rejects duplicate command acknowledge and complete calls', () => {
+      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const cmdId = `cmd-dup-${Date.now()}`;
+      run(`INSERT INTO hardware_commands (id, device_id, type, status, idempotency_key, created_at, updated_at)
+           VALUES (?, 'arm-esp32', 'SORT_TO_BIN', 'RELEASED', ?, ?, ?)`, [cmdId, `key-${cmdId}`, now, now]);
+
+      // First ACK
+      const ack1 = acknowledgeCommand(cmdId);
+      expect(ack1.success).toBe(true);
+
+      // Duplicate ACK
+      const ack2 = acknowledgeCommand(cmdId);
+      expect(ack2.success).toBe(false);
+      expect(ack2.error).toBe('Command already acknowledged');
+
+      // First COMPLETE
+      const comp1 = completeCommand(cmdId, 1000);
+      expect(comp1.success).toBe(true);
+
+      // Duplicate COMPLETE
+      const comp2 = completeCommand(cmdId, 1000);
+      expect(comp2.success).toBe(false);
+      expect(comp2.error).toBe('Command already completed');
     });
   });
 });
