@@ -1,7 +1,7 @@
 # Graph Report - parcelflow  (2026-10-19)
 
 ## Corpus Check
-- 90 files · ~79,523 words
+- 90 files · ~79,524 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
@@ -10,7 +10,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `e533c565`
+- Built from commit: `b9c369a6`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -94,11 +94,11 @@ Nodes (100): AdminPortal(), AdminSidebar(), AdminSidebarProps, BarcodeCannerProp
 
 ### Community 1 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.05
-Nodes (45): clearScanTimeoutTimer(), handleScanTimeout(), resetIrSensorHistory(), ack1, ack2, ackRes, cfg, cmd (+37 more)
+Nodes (42): ack1, ack2, ackRes, cfg, cmd, comp1, comp2, completeRes (+34 more)
 
 ### Community 2 - "Fulfillment Operations & Hardware Simulation"
-Cohesion: 0.08
-Nodes (33): simulateScan(), isSingleParcelMode(), queryOne(), computeMac(), generateLabelPayload(), generateParcelId(), LabelResult, recordLabelPrinted() (+25 more)
+Cohesion: 0.07
+Nodes (39): simulateScan(), EnvConfig, envSchema, isGoogleLoginAvailable(), isHardwareApiEnabled(), isSingleParcelMode(), loadConfig(), queryOne() (+31 more)
 
 ### Community 3 - "Customer E-Commerce Experience"
 Cohesion: 0.06
@@ -113,12 +113,12 @@ Cohesion: 0.07
 Nodes (29): 1. Color Palette, 2. Typography, 3. Spacing & Layout, 4. Border Radius, 5. Shadows, 6. Components, 7. Icons, 8. Animations & Transitions (+21 more)
 
 ### Community 6 - "Authentication & RBAC Security"
-Cohesion: 0.19
-Nodes (26): emergencyStop(), getMachineState(), logMachineStatus(), MachineState, pauseConveyor(), resetEmergencyStopUi(), simulateIrEvent(), startConveyor() (+18 more)
-
-### Community 7 - "Shared Design System Components"
 Cohesion: 0.07
 Nodes (27): 1. Physical Architecture & Rig Topology, 2. Device Authentication, 3.1 Device Heartbeat, 3.2 Infrared Sensor Events, 3.3 Conveyor Desired State Polling, 3.4 Hardware Command Queue (Robotic Arm), 3.5 Command Acknowledge (ACK), 3.6 Command Complete (DONE) (+19 more)
+
+### Community 7 - "Shared Design System Components"
+Cohesion: 0.2
+Nodes (23): emergencyStop(), getMachineState(), logMachineStatus(), pauseConveyor(), processNextOrder(), resetEmergencyStopUi(), simulateFault(), simulateIrEvent() (+15 more)
 
 ### Community 8 - "Module Group 8"
 Cohesion: 0.08
@@ -133,44 +133,44 @@ Cohesion: 0.08
 Nodes (22): setGoogleJwksResolver(), badJwt, badLabel, bakBuffer, bakDbFile, cfg, check, hash (+14 more)
 
 ### Community 11 - "Authentication & RBAC Security"
-Cohesion: 0.19
-Nodes (21): ARCHITECTURE.md (System Architecture), initHardwareSimulator(), simulateFault(), stopSimulatorIntervals(), config, startServer(), hashPassword(), applyPragmasAndIndexes() (+13 more)
-
-### Community 12 - "Module Group 12"
 Cohesion: 0.08
 Nodes (23): 1.1 Authentication Tests, 1.2 Authorization / RBAC Tests, 1.3 Customer Data Isolation Tests, 1.4 Application Feature Tests, 1.5 Route Protection Tests, 1.6 Error State Tests, 1. Test Coverage Requirements, 2.1 Authentication Flow (+15 more)
 
-### Community 13 - "Module Group 13"
+### Community 12 - "Module Group 12"
 Cohesion: 0.09
 Nodes (22): 1. Customer Storefront (`/customer`), 1. Install Dependencies, 2. Environment Configuration, 2. Warehouse Operator Control Room (`/operator`), 3. Admin Business Center (`/admin`), 3. Run Development Server, Architecture & Portals, code:bash (npm install) (+14 more)
 
-### Community 14 - "Executive Business Administration & Analytics"
+### Community 13 - "Module Group 13"
 Cohesion: 0.09
 Nodes (21): 10. Graphify Codebase Knowledge Graph, 1. Critical Rules, 2. Architecture Quick Reference, 3. Adding a New API Endpoint, 4. Adding a New Page to a Portal, 5. Adding a New Database Table, 6. Existing Role Authorization, 7. Key Files to Read Before Making Changes (+13 more)
 
-### Community 15 - "Customer E-Commerce Experience"
+### Community 14 - "Executive Business Administration & Analytics"
 Cohesion: 0.14
 Nodes (16): OperatorSidebar(), OperatorSidebarProps, getSocket(), initSocket(), OperatorConveyorProps, ClientToServerEvents, DeviceHeartbeatRecord, PipelineSnapshot (+8 more)
 
-### Community 16 - "Customer E-Commerce Experience"
+### Community 15 - "Customer E-Commerce Experience"
 Cohesion: 0.11
 Nodes (17): 1. Product Overview, 2. Problem Statement, 3. Goal, 4. Target Users, 5.1 Authentication & Authorization, 5.2 Customer Portal, 5.3 Warehouse / Operator Portal, 5.4 Administrator Portal (+9 more)
 
+### Community 16 - "Customer E-Commerce Experience"
+Cohesion: 0.29
+Nodes (15): hashPassword(), applyPragmasAndIndexes(), DB_FILE, doSave(), ensureMigrationsTable(), flushSave(), getDb(), hasMigration() (+7 more)
+
 ### Community 17 - "Customer E-Commerce Experience"
+Cohesion: 0.22
+Nodes (15): MachineState, requireDeviceToken(), getConfig(), query(), checkArmTimeouts(), checkDeviceWatchdog(), clearScanTimeoutTimer(), getDesiredConveyorState() (+7 more)
+
+### Community 18 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.18
 Nodes (10): AuthenticatedRequest, base64UrlDecode(), extractUserFromRequest(), hardwareAttempts, loginAttempts, RateLimitRecord, requireAuth(), scanAttempts (+2 more)
 
-### Community 18 - "Fulfillment Operations & Hardware Simulation"
+### Community 19 - "Fulfillment Operations & Hardware Simulation"
 Cohesion: 0.2
 Nodes (11): SECURITY.md (Security & RBAC Specification), TESTING.md (Testing Guide & Test Cases), Firebase Google OAuth Flow (/auth/google), Role-Based Access Control (RBAC), addresses (Database Table), users (Database Table), base64UrlEncode(), generateToken() (+3 more)
 
-### Community 19 - "Fulfillment Operations & Hardware Simulation"
-Cohesion: 0.25
-Nodes (10): requireDeviceToken(), EnvConfig, envSchema, getConfig(), isGoogleLoginAvailable(), isHardwareApiEnabled(), loadConfig(), query() (+2 more)
-
 ### Community 20 - "Fulfillment Operations & Hardware Simulation"
-Cohesion: 0.22
-Nodes (9): AGENTS.md (AI Agent & Architecture Instructions), processNextOrder(), sleep(), updateOrderStatus(), order_status_history (Database Table), isValidTransition(), OrderStatus, transitionOrderStatus() (+1 more)
+Cohesion: 0.2
+Nodes (10): AGENTS.md (AI Agent & Architecture Instructions), ARCHITECTURE.md (System Architecture), initHardwareSimulator(), stopSimulatorIntervals(), startServer(), order_status_history (Database Table), isValidTransition(), OrderStatus (+2 more)
 
 ### Community 21 - "Authentication & RBAC Security"
 Cohesion: 0.25
@@ -200,11 +200,11 @@ Nodes (4): Additional observations, Confirmed Findings, ParcelFlow Security & Co
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `apiFetch()` connect `Authentication & RBAC Security` to `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`, `Customer E-Commerce Experience`?**
+- **Why does `apiFetch()` connect `Authentication & RBAC Security` to `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`, `Executive Business Administration & Analytics`?**
   _High betweenness centrality (0.043) - this node is a cross-community bridge._
-- **Why does `createApiRouter()` connect `Fulfillment Operations & Hardware Simulation` to `Authentication & RBAC Security`, `System Architecture & Documentation`, `Authentication & RBAC Security`, `Authentication & RBAC Security`?**
+- **Why does `createApiRouter()` connect `Fulfillment Operations & Hardware Simulation` to `Authentication & RBAC Security`, `System Architecture & Documentation`, `Fulfillment Operations & Hardware Simulation`, `Shared Design System Components`?**
   _High betweenness centrality (0.042) - this node is a cross-community bridge._
-- **Why does `run()` connect `Authentication & RBAC Security` to `Fulfillment Operations & Hardware Simulation`, `Fulfillment Operations & Hardware Simulation`, `Authentication & RBAC Security`, `System Architecture & Documentation`, `Customer E-Commerce Experience`, `Fulfillment Operations & Hardware Simulation`, `Fulfillment Operations & Hardware Simulation`?**
+- **Why does `run()` connect `Customer E-Commerce Experience` to `Fulfillment Operations & Hardware Simulation`, `Fulfillment Operations & Hardware Simulation`, `Shared Design System Components`, `System Architecture & Documentation`, `Customer E-Commerce Experience`, `Fulfillment Operations & Hardware Simulation`, `Fulfillment Operations & Hardware Simulation`?**
   _High betweenness centrality (0.019) - this node is a cross-community bridge._
 - **What connects `config`, `OrderStatus`, `PaymentStatus` to the rest of the system?**
   _341 weakly-connected nodes found - possible documentation gaps or missing edges._
@@ -213,4 +213,4 @@ _Questions this graph is uniquely positioned to answer:_
 - **Should `Fulfillment Operations & Hardware Simulation` be split into smaller, more focused modules?**
   _Cohesion score 0.05 - nodes in this community are weakly interconnected._
 - **Should `Fulfillment Operations & Hardware Simulation` be split into smaller, more focused modules?**
-  _Cohesion score 0.08 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.07 - nodes in this community are weakly interconnected._
