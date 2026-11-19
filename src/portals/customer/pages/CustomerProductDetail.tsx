@@ -43,6 +43,8 @@ export const CustomerProductDetail: React.FC<CustomerProductDetailProps> = ({
   const [reviewComment, setReviewComment] = useState<string>('');
   const [isSubmittingReview, setIsSubmittingReview] = useState<boolean>(false);
 
+  const [galleryImages, setGalleryImages] = useState<string[]>([]);
+
   useEffect(() => {
     setIsLoading(true);
     apiFetch<{ product: Product; reviews: Review[]; related: Product[] }>(`/catalog/products/${productId}`)
@@ -50,15 +52,36 @@ export const CustomerProductDetail: React.FC<CustomerProductDetailProps> = ({
         setProduct(data.product);
         setReviews(data.reviews || []);
         setRelated(data.related || []);
+        if (data.product) {
+          const base = data.product.image_url;
+          setGalleryImages([
+            base,
+            `${base}&auto=format&fit=crop&w=700&q=85`,
+            `${base}&auto=format&fit=crop&w=900&q=90`
+          ]);
+        }
       })
       .catch(console.error)
       .finally(() => setIsLoading(false));
   }, [productId]);
 
-  if (isLoading || !product) {
+  if (isLoading) {
     return (
-      <div className="py-20 text-center text-zinc-500">
-        Loading product information...
+      <div className="py-24 text-center text-zinc-500 space-y-3">
+        <div className="w-8 h-8 mx-auto border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+        <p className="text-sm">Loading product information...</p>
+      </div>
+    );
+  }
+
+  if (!product) {
+    return (
+      <div className="py-24 text-center text-zinc-600 space-y-4 max-w-md mx-auto">
+        <h3 className="text-lg font-bold text-zinc-900">Product Not Found</h3>
+        <p className="text-xs text-zinc-500">The product you are looking for is unavailable or has been unlisted.</p>
+        <Button variant="secondary" size="sm" onClick={onBack} icon={<ArrowLeft className="w-3.5 h-3.5" />}>
+          Back to Catalog
+        </Button>
       </div>
     );
   }
@@ -112,30 +135,32 @@ export const CustomerProductDetail: React.FC<CustomerProductDetailProps> = ({
         <div className="space-y-4">
           <div className="aspect-square rounded-xl overflow-hidden bg-zinc-100 border border-zinc-200/60 relative">
             <img
-              src={product.image_url}
+              src={galleryImages[selectedImageIdx] || product.image_url}
               alt={product.name}
               referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover transition-opacity duration-200"
             />
             {product.discount_percent > 0 && (
-              <span className="absolute top-4 left-4 bg-orange-600 text-white font-bold text-xs px-2.5 py-1 rounded-md shadow-xs">
+              <span className="absolute top-4 left-4 bg-amber-600 text-white font-bold text-xs px-2.5 py-1 rounded-md shadow-xs">
                 {product.discount_percent}% OFF
               </span>
             )}
           </div>
           {/* Thumbnails */}
           <div className="flex items-center gap-3">
-            {[0, 1, 2].map(idx => (
+            {(galleryImages.length > 0 ? galleryImages : [product.image_url]).map((imgUrl, idx) => (
               <button
                 key={idx}
+                type="button"
                 onClick={() => setSelectedImageIdx(idx)}
+                aria-label={`View image perspective ${idx + 1}`}
                 className={`w-20 h-20 rounded-lg overflow-hidden border-2 transition-all cursor-pointer ${
-                  selectedImageIdx === idx ? 'border-orange-600 ring-2 ring-orange-100' : 'border-zinc-200 opacity-70 hover:opacity-100'
+                  selectedImageIdx === idx ? 'border-amber-600 ring-2 ring-amber-100 opacity-100' : 'border-zinc-200 opacity-70 hover:opacity-100'
                 }`}
               >
                 <img
-                  src={product.image_url}
-                  alt="Thumbnail"
+                  src={imgUrl}
+                  alt={`Thumbnail ${idx + 1}`}
                   referrerPolicy="no-referrer"
                   className="w-full h-full object-cover"
                 />
@@ -192,29 +217,29 @@ export const CustomerProductDetail: React.FC<CustomerProductDetailProps> = ({
               {isOutOfStock ? (
                 <div className="flex items-center gap-1.5 text-red-600 font-medium">
                   <span className="w-2 h-2 rounded-full bg-red-600" />
-                  <span>Out of stock at warehouse</span>
+                  <span>Out of stock — replenishment in progress</span>
                 </div>
               ) : isLowStock ? (
                 <div className="flex items-center gap-1.5 text-amber-600 font-semibold">
                   <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />
-                  <span>Low stock — only {product.stock_quantity} left in Rack {product.warehouse_rack_location}</span>
+                  <span>Low stock — only {product.stock_quantity} units remaining</span>
                 </div>
               ) : (
                 <div className="flex items-center gap-1.5 text-emerald-600 font-medium">
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>In Stock — {product.stock_quantity} units available for instant robotic sorting</span>
+                  <span>In Stock — {product.stock_quantity} units ready for immediate dispatch</span>
                 </div>
               )}
             </div>
 
             {/* Fulfillment metadata */}
             <div className="grid grid-cols-2 gap-3 pt-2 text-xs text-zinc-600">
-              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 flex items-center gap-2">
-                <MapPin className="w-4 h-4 text-zinc-400 shrink-0" />
-                <span>Warehouse Location: <strong className="text-zinc-800 font-mono">{product.warehouse_rack_location}</strong></span>
+              <div className="p-3 bg-stone-50 rounded-lg border border-stone-200/80 flex items-center gap-2">
+                <MapPin className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>Dispatch: <strong className="text-zinc-800">Smart Hub Fulfillment</strong></span>
               </div>
-              <div className="p-3 bg-zinc-50 rounded-lg border border-zinc-100 flex items-center gap-2">
-                <Truck className="w-4 h-4 text-zinc-400 shrink-0" />
+              <div className="p-3 bg-stone-50 rounded-lg border border-stone-200/80 flex items-center gap-2">
+                <Truck className="w-4 h-4 text-teal-600 shrink-0" />
                 <span>Parcel Weight: <strong className="text-zinc-800">{product.weight_grams}g</strong></span>
               </div>
             </div>

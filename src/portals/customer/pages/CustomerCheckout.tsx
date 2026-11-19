@@ -415,7 +415,7 @@ export const CustomerCheckout: React.FC<CustomerCheckoutProps> = ({
                         />
                         <div className="truncate">
                           <p className="font-medium text-zinc-900 truncate">{item.name}</p>
-                          <p className="text-[11px] text-zinc-400">Qty: {item.quantity} &bull; Rack: {item.warehouse_rack_location}</p>
+                          <p className="text-[11px] text-zinc-400">Qty: {item.quantity} &bull; {formatINR(item.price)} each</p>
                         </div>
                       </div>
                       <span className="font-bold text-zinc-900 font-mono shrink-0">
