@@ -9,7 +9,11 @@ import {
   AlertTriangle,
   TrendingUp,
   Download,
-  Calendar
+  Calendar,
+  ScanLine,
+  Timer,
+  CheckCircle2,
+  AlertOctagon
 } from 'lucide-react';
 import { Button } from '../../../shared/components/Button';
 import {
@@ -88,25 +92,25 @@ export const AdminAnalytics: React.FC = () => {
         <KPICard
           label="Total Revenue"
           value={formatINR(overview.totalRevenue)}
-          subtext="+14.2% from previous cycle"
+          subtext="Net confirmed sales"
           icon={<DollarSign className="w-4 h-4 text-emerald-600" />}
         />
         <KPICard
           label="Total Orders"
           value={overview.totalOrders}
-          subtext="E-commerce storefront"
+          subtext={data?.kpis?.pendingPayments ? `${data.kpis.pendingPayments} pending payments` : 'Storefront orders'}
           icon={<ShoppingCart className="w-4 h-4 text-blue-600" />}
         />
         <KPICard
           label="Conveyor Sort Rate"
           value={`${overview.sortRatePerHour} / hr`}
-          subtext="Avg sort: 1,420 ms"
+          subtext={data?.warehouseMetrics?.avgSortTimeMs ? `Avg sort: ${data.warehouseMetrics.avgSortTimeMs} ms` : 'Optical sorting'}
           icon={<Zap className="w-4 h-4 text-amber-600" />}
         />
         <KPICard
           label="Low Stock Alerts"
           value={overview.lowStockCount}
-          subtext="Items below 5 units"
+          subtext="Inventory threshold triggers"
           icon={<AlertTriangle className="w-4 h-4 text-red-600" />}
         />
       </div>
@@ -239,6 +243,98 @@ export const AdminAnalytics: React.FC = () => {
                 <Bar dataKey="count" fill="#6366f1" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      {/* Optical Scanning Quality & Physical Pipeline Telemetry (Phase 7.2) */}
+      <div className="bg-white border border-zinc-200/80 rounded-2xl p-6 shadow-xs space-y-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pb-3 border-b border-zinc-100">
+          <div>
+            <h3 className="text-base font-bold text-zinc-900 flex items-center gap-2">
+              <ScanLine className="w-5 h-5 text-teal-600" />
+              <span>Optical QR Scanning &amp; Physical Pipeline Analytics</span>
+            </h3>
+            <p className="text-xs text-zinc-500 mt-0.5">
+              Live webcam decode performance, rejection taxonomy, and robotic arm cycle times.
+            </p>
+          </div>
+          <span className="text-xs font-mono font-bold text-teal-700 bg-teal-50 px-2.5 py-1 rounded border border-teal-200">
+            Scan Accuracy: {data?.pipelineAnalytics?.scanSuccessRate ?? 98}%
+          </span>
+        </div>
+
+        {/* 4 Pipeline Micro-Cards */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200">
+            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">TOTAL SCANS LOGGED</span>
+            <span className="text-xl font-bold font-mono text-zinc-900 mt-1 block">
+              {data?.pipelineAnalytics?.totalScans ?? 0}
+            </span>
+            <span className="text-[11px] text-zinc-500 mt-0.5 block">Camera + manual decodes</span>
+          </div>
+
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200">
+            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">SCAN SUCCESS RATE</span>
+            <span className="text-xl font-bold font-mono text-emerald-700 mt-1 block">
+              {data?.pipelineAnalytics?.scanSuccessRate ?? 100}%
+            </span>
+            <span className="text-[11px] text-emerald-600 mt-0.5 block">Cryptographic MAC verified</span>
+          </div>
+
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200">
+            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">AVG SCAN-TO-SORT TIME</span>
+            <span className="text-xl font-bold font-mono text-teal-700 mt-1 block">
+              {data?.pipelineAnalytics?.avgScanToSortedSec ?? 5}s
+            </span>
+            <span className="text-[11px] text-zinc-500 mt-0.5 block">IR pick + 4-DOF placement</span>
+          </div>
+
+          <div className="p-4 rounded-xl bg-zinc-50 border border-zinc-200">
+            <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-wider block">ACTIVE SORTING BINS</span>
+            <span className="text-xl font-bold font-mono text-zinc-900 mt-1 block">
+              {data?.pipelineAnalytics?.binsStats?.length ?? 4} Bins
+            </span>
+            <span className="text-[11px] text-zinc-500 mt-0.5 block">Category-routed allocation</span>
+          </div>
+        </div>
+
+        {/* Rejection Breakdown and Bin Allocation Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-2">
+          {/* Rejections taxonomy */}
+          <div className="border border-zinc-200 rounded-xl p-4 bg-zinc-50/50 space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700">
+              Optical Rejection Breakdown
+            </h4>
+            {(!data?.pipelineAnalytics?.rejectsByReason || data.pipelineAnalytics.rejectsByReason.length === 0) ? (
+              <p className="text-xs text-zinc-400 italic py-4 text-center">
+                Zero rejections recorded — 100% first-pass decode rate.
+              </p>
+            ) : (
+              <div className="space-y-2 font-mono text-xs">
+                {data.pipelineAnalytics.rejectsByReason.map((r: any) => (
+                  <div key={r.result} className="flex items-center justify-between p-2 rounded bg-white border border-zinc-200">
+                    <span className="font-semibold text-zinc-800">{r.result}</span>
+                    <span className="px-2 py-0.5 rounded bg-red-100 text-red-800 font-bold">{r.count} rejection(s)</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Bin Counts */}
+          <div className="border border-zinc-200 rounded-xl p-4 bg-zinc-50/50 space-y-3">
+            <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-700">
+              Live Parcels Staged per Bin
+            </h4>
+            <div className="grid grid-cols-2 gap-2 font-mono text-xs">
+              {(data?.pipelineAnalytics?.binsStats || []).map((b: any) => (
+                <div key={b.label} className="p-2.5 rounded bg-white border border-zinc-200 flex justify-between items-center">
+                  <span className="font-bold text-zinc-900">{b.label}</span>
+                  <span className="text-teal-700 font-black text-sm">{b.parcel_count}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>

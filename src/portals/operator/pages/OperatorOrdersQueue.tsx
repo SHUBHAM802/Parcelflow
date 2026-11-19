@@ -85,7 +85,7 @@ export const OperatorOrdersQueue: React.FC<OperatorOrdersQueueProps> = ({
             const isPicking = order.status === 'PICKING';
             const isPacking = order.status === 'PACKING';
             const isReady = order.status === 'PACKED';
-            const isConveyor = ['ON_CONVEYOR', 'DETECTED', 'SORTING'].includes(order.status);
+            const isConveyor = ['ON_CONVEYOR', 'SCANNED', 'DETECTED', 'SORTING'].includes(order.status);
             const isSorted = order.status === 'SORTED';
             const isDispatched = order.status === 'DISPATCHED';
 

@@ -1,25 +1,25 @@
 import React from 'react';
 import { useAuth } from '../../../shared/store/authContext';
-import { ShieldCheck, BarChart3, RefreshCw } from 'lucide-react';
+import { ParcelFlowLogo } from '../../../shared/components/ParcelFlowLogo';
+import { ShieldCheck, BarChart3, RefreshCw, LogOut } from 'lucide-react';
 
 interface AdminHeaderProps {
   onRefresh?: () => void;
 }
 
 export const AdminHeader: React.FC<AdminHeaderProps> = ({ onRefresh }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   return (
-    <header className="sticky top-[37px] z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
+    <header className="sticky top-0 z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
       <div className="flex items-center justify-between gap-4 flex-wrap">
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-            PF
-          </div>
+          <ParcelFlowLogo variant="compact" size="md" theme="dark" />
+          <div className="h-6 w-px bg-zinc-800 hidden sm:block" />
           <div>
             <div className="text-sm font-bold tracking-tight flex items-center gap-2">
               <span>ParcelFlow Executive Hub</span>
-              <span className="text-[10px] bg-indigo-950 text-indigo-300 border border-indigo-800/80 px-2 py-0.5 rounded font-mono">
+              <span className="text-[10px] bg-amber-950/80 text-amber-300 border border-amber-800/80 px-2 py-0.5 rounded font-mono">
                 Admin Console
               </span>
             </div>
@@ -28,9 +28,10 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({ onRefresh }) => {
         </div>
 
         <div className="flex items-center gap-3 text-xs text-zinc-400">
-          <div className="hidden sm:flex items-center gap-2 bg-zinc-800 px-2.5 py-1 rounded-md border border-zinc-700 font-mono text-[11px]">
+          <div className="hidden sm:flex items-center gap-2 bg-zinc-800/90 px-2.5 py-1 rounded-md border border-zinc-700 font-mono text-[11px]">
             <span className="text-zinc-500">GSTIN:</span>
             <span className="text-zinc-200 font-bold">27AABCP1234F1Z9</span>
+            <span className="text-[9px] text-amber-400 bg-amber-950/60 px-1 py-0.2 rounded border border-amber-800/60">Demo</span>
           </div>
 
           <div className="flex items-center gap-2 bg-zinc-800 px-2.5 py-1 rounded-md border border-zinc-700 text-[11px]">
@@ -47,6 +48,15 @@ export const AdminHeader: React.FC<AdminHeaderProps> = ({ onRefresh }) => {
               <RefreshCw className="w-4 h-4" />
             </button>
           )}
+
+          <button
+            onClick={logout}
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+            title="Log out"
+            aria-label="Log out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>

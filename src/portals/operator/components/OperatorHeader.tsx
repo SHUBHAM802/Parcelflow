@@ -2,7 +2,7 @@ import React from 'react';
 import { MachineState } from '../../../types';
 import { StatusDotPill } from '../../../shared/components/StatusDotPill';
 import { useAuth } from '../../../shared/store/authContext';
-import { Cpu, Wifi, Video, Activity, Bot, RefreshCw } from 'lucide-react';
+import { Cpu, Wifi, Video, Activity, Bot, RefreshCw, LogOut } from 'lucide-react';
 
 interface OperatorHeaderProps {
   machineState: MachineState;
@@ -10,7 +10,7 @@ interface OperatorHeaderProps {
 }
 
 export const OperatorHeader: React.FC<OperatorHeaderProps> = ({ machineState, onRefresh }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   return (
     <header className="sticky top-[37px] z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
@@ -82,6 +82,14 @@ export const OperatorHeader: React.FC<OperatorHeaderProps> = ({ machineState, on
             <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
             <span className="font-mono text-zinc-300 text-[11px]">{machineState.motorRpm} RPM</span>
           </div>
+          <button
+            onClick={logout}
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+            title="Log out"
+            aria-label="Log out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>

@@ -1,12 +1,22 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, Role } from '../../types';
 import { apiFetch } from '../lib/api';
+import { reconnectSocket } from '../lib/socket';
+import { auth } from '../lib/firebase';
+import { signOut } from 'firebase/auth';
 
 interface AuthContextType {
   user: User | null;
   activeRole: Role | null;
   login: (email: string, password?: string) => Promise<User>;
   register: (name: string, email: string, password?: string, phone?: string) => Promise<User>;
+  loginWithGoogle: (googleData: {
+    uid: string;
+    email: string;
+    displayName?: string | null;
+    photoURL?: string | null;
+    idToken?: string;
+  }) => Promise<User>;
   logout: () => void;
   isLoading: boolean;
 }
@@ -38,6 +48,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser(res.user);
       localStorage.setItem('parcelflow_user', JSON.stringify(res.user));
       localStorage.setItem('parcelflow_token', res.token);
+      reconnectSocket();
 
       // Land directly in the portal matching the user account's role
       const targetPath = res.user.role === 'customer' 
@@ -63,6 +74,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser(res.user);
       localStorage.setItem('parcelflow_user', JSON.stringify(res.user));
       localStorage.setItem('parcelflow_token', res.token);
+      reconnectSocket();
 
       window.history.replaceState(null, '', '/customer');
       return res.user;
@@ -71,16 +83,61 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const loginWithGoogle = async (googleData: {
+    uid: string;
+    email: string;
+    displayName?: string | null;
+    photoURL?: string | null;
+    idToken?: string;
+  }): Promise<User> => {
+    setIsLoading(true);
+    try {
+      const res = await apiFetch<{ user: User; token: string }>('/auth/google', {
+        method: 'POST',
+        body: JSON.stringify({
+          uid: googleData.uid,
+          email: googleData.email.trim(),
+          name: (googleData.displayName || '').trim(),
+          photoUrl: googleData.photoURL || '',
+          idToken: googleData.idToken || ''
+        })
+      });
+      setUser(res.user);
+      localStorage.setItem('parcelflow_user', JSON.stringify(res.user));
+      localStorage.setItem('parcelflow_token', res.token);
+      reconnectSocket();
+
+      // Redirect customer to /customer
+      const targetPath = res.user.role === 'customer' 
+        ? '/customer' 
+        : res.user.role === 'operator' 
+          ? '/operator' 
+          : '/admin';
+      window.history.replaceState(null, '', targetPath);
+
+      return res.user;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const logout = () => {
+    // Synchronize Firebase sign out if active
+    if (auth && auth.currentUser) {
+      signOut(auth).catch((err) => {
+        console.warn('[ParcelFlow] Firebase signOut error:', err);
+      });
+    }
     setUser(null);
     localStorage.removeItem('parcelflow_user');
     localStorage.removeItem('parcelflow_token');
     localStorage.removeItem('parcelflow_active_role');
+    reconnectSocket();
     window.history.replaceState(null, '', '/login');
   };
 
   return (
-    <AuthContext.Provider value={{ user, activeRole, login, register, logout, isLoading }}>
+    <AuthContext.Provider value={{ user, activeRole, login, register, loginWithGoogle, logout, isLoading }}>
       {children}
     </AuthContext.Provider>
   );

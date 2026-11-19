@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, ShoppingCart, Heart, Package, User as UserIcon, ArrowRight } from 'lucide-react';
+import { Search, ShoppingCart, Heart, Package, User as UserIcon, LogOut } from 'lucide-react';
 import { useAuth } from '../../../shared/store/authContext';
 import { apiFetch } from '../../../shared/lib/api';
 import { Category } from '../../../types';
@@ -23,7 +23,7 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({
   onSearchChange,
   onOpenCart
 }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const [categories, setCategories] = useState<Category[]>([]);
 
   useEffect(() => {
@@ -31,25 +31,19 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({
   }, []);
 
   return (
-    <header className="sticky top-[37px] z-40 bg-white border-b border-zinc-200/80 shadow-2xs">
+    <header className="sticky top-0 z-40 bg-white border-b border-zinc-200/80 shadow-2xs">
       <div className="max-w-7xl mx-auto px-4 sm:px-6">
         {/* Main top bar */}
         <div className="flex items-center justify-between h-16 gap-4 sm:gap-6">
-          {/* Brand */}
+          {/* Left: Storefront Navigation */}
           <div
             onClick={() => onNavigate('home')}
-            className="flex items-center gap-2 cursor-pointer shrink-0"
+            className="flex items-center gap-2 cursor-pointer shrink-0 py-1"
+            title="Storefront Home"
           >
-            <div className="w-9 h-9 rounded-xl bg-orange-600 text-white flex items-center justify-center font-bold text-lg shadow-xs">
-              PF
-            </div>
-            <div>
-              <div className="text-lg font-bold text-zinc-900 tracking-tight leading-none flex items-center gap-1">
-                <span>ParcelFlow</span>
-                <span className="text-[10px] uppercase font-semibold text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded ml-1">Store</span>
-              </div>
-              <p className="text-[10px] text-zinc-400 leading-none mt-0.5">Express Smart Delivery</p>
-            </div>
+            <span className="text-lg font-bold tracking-tight text-zinc-900 hover:text-orange-600 transition-colors">
+              Store
+            </span>
           </div>
 
           {/* Search bar */}
@@ -118,6 +112,7 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({
               className={`flex items-center gap-2 p-1.5 sm:px-3 sm:py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
                 activePage === 'profile' ? 'bg-zinc-100 text-zinc-900' : 'text-zinc-700 hover:bg-zinc-100'
               }`}
+              title="View Account Profile"
             >
               <div className="w-7 h-7 rounded-full bg-zinc-200 text-zinc-700 flex items-center justify-center font-semibold text-xs">
                 {user?.name ? user.name[0].toUpperCase() : 'U'}
@@ -125,6 +120,17 @@ export const CustomerHeader: React.FC<CustomerHeaderProps> = ({
               <span className="hidden lg:inline text-xs font-medium text-zinc-800 truncate max-w-[90px]">
                 {user?.name || 'Account'}
               </span>
+            </button>
+
+            {/* Quick Log Out */}
+            <button
+              id="customer-header-logout-btn"
+              onClick={logout}
+              className="p-2 rounded-lg text-zinc-400 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer"
+              title="Log out of account"
+              aria-label="Log out"
+            >
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
         </div>
