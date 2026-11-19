@@ -1,6 +1,16 @@
 import { Server as SocketIOServer } from 'socket.io';
-import { query, queryOne, run } from '../db';
-import { transitionOrderStatus } from '../orderStateMachine';
+import { run } from '../db';
+import { getConfig } from '../config';
+import {
+  getNextCommandForDevice,
+  acknowledgeCommand,
+  completeCommand,
+  setDesiredConveyor,
+  triggerEmergencyStop,
+  resetEmergencyStop,
+  handleIrEvent
+} from '../services/hardwareService';
+import { processScan } from '../services/scanService';
 
 export interface MachineState {
   esp32: 'ONLINE' | 'OFFLINE';
@@ -17,9 +27,10 @@ export interface MachineState {
 }
 
 let ioInstance: SocketIOServer | null = null;
-let simulationInterval: NodeJS.Timeout | null = null;
 let statusBroadcastInterval: NodeJS.Timeout | null = null;
-let isProcessingOrder = false;
+let armWorkerInterval: NodeJS.Timeout | null = null;
+let isArmBusy = false;
+let irSequenceCounter = 1000;
 
 export const machineState: MachineState = {
   esp32: 'ONLINE',
@@ -35,13 +46,36 @@ export const machineState: MachineState = {
   cameraResolution: '1920x1080 60Hz'
 };
 
+/**
+ * Initialize hardware simulator.
+ * Stays completely INERT if HARDWARE_MODE=real.
+ * In simulator mode: runs virtual robotic arm command worker that processes
+ * authoritative commands released by genuine IR2 events.
+ * Does NOT auto-sort ON_CONVEYOR orders and does NOT emit fake camera:frame events.
+ */
 export function initHardwareSimulator(io: SocketIOServer) {
   ioInstance = io;
 
-  // Broadcast machine state every 2 seconds
+  let cfg;
+  try {
+    cfg = getConfig();
+  } catch {
+    // Config not yet loaded
+    return;
+  }
+
+  // Ground Rule & Requirement 2: Stay inert in HARDWARE_MODE=real
+  if (cfg.HARDWARE_MODE === 'real') {
+    console.log('[ParcelFlow] HARDWARE_MODE is "real". Hardware simulator is INERT.');
+    stopSimulatorIntervals();
+    return;
+  }
+
+  console.log('[ParcelFlow] HARDWARE_MODE is "simulator". Virtual digital twin worker active.');
+
+  // 1. Broadcast telemetry every 2 seconds with slight RPM jitter if running
   if (statusBroadcastInterval) clearInterval(statusBroadcastInterval);
   statusBroadcastInterval = setInterval(() => {
-    // Add realistic motor RPM fluctuations if running
     if (machineState.conveyor === 'RUNNING') {
       machineState.motorRpm = Math.floor(118 + Math.random() * 6);
     } else {
@@ -50,15 +84,74 @@ export function initHardwareSimulator(io: SocketIOServer) {
     io.emit('machine:status', machineState);
   }, 2000);
 
-  // Main conveyor processing loop (every 3.5 seconds)
-  if (simulationInterval) clearInterval(simulationInterval);
-  simulationInterval = setInterval(async () => {
-    if (machineState.conveyor !== 'RUNNING') return;
-    if (machineState.esp32 !== 'ONLINE' || machineState.wifi !== 'CONNECTED') return;
-    if (isProcessingOrder) return;
+  // 2. Virtual Robotic Arm worker:
+  // ONLY processes commands that were explicitly RELEASED by an authentic IR2 event.
+  // Calls the EXACT same services (getNextCommandForDevice, acknowledgeCommand, completeCommand)
+  // as the physical arm-esp32 REST client.
+  if (armWorkerInterval) clearInterval(armWorkerInterval);
+  armWorkerInterval = setInterval(async () => {
+    if (isArmBusy) return;
+    if (machineState.conveyor === 'EMERGENCY_STOPPED') return;
+    if (machineState.robot === 'FAULT') return;
 
-    await processNextOrder();
-  }, 3500);
+    // Check for released arm command
+    const cmd = getNextCommandForDevice('arm-esp32');
+    if (!cmd) return;
+
+    isArmBusy = true;
+
+    if (cmd.type === 'TEST_JOINT') {
+      try {
+        acknowledgeCommand(cmd.commandId, ioInstance);
+        await sleep(400);
+        completeCommand(cmd.commandId, 400, ioInstance);
+      } finally {
+        isArmBusy = false;
+      }
+      return;
+    }
+
+    machineState.robot = 'BUSY';
+    machineState.activeOrderId = cmd.orderId || null;
+    machineState.activeOrderBin = cmd.bin?.label || null;
+
+    try {
+      // 1. Acknowledge command (same as POST /api/hardware/commands/:id/ack)
+      acknowledgeCommand(cmd.commandId, ioInstance);
+      ioInstance?.emit('robot:action', { orderId: cmd.orderId, parcelId: cmd.parcelId, action: 'PICKING' });
+      await sleep(800);
+
+      ioInstance?.emit('robot:action', { orderId: cmd.orderId, parcelId: cmd.parcelId, action: 'MOVING', targetBin: cmd.bin?.label });
+      await sleep(800);
+
+      ioInstance?.emit('robot:action', { orderId: cmd.orderId, parcelId: cmd.parcelId, action: 'PLACING', targetBin: cmd.bin?.label });
+      await sleep(600);
+
+      // 2. Complete command (same as POST /api/hardware/commands/:id/complete)
+      const durationMs = 2200;
+      completeCommand(cmd.commandId, durationMs, ioInstance);
+
+      ioInstance?.emit('robot:action', { orderId: cmd.orderId, parcelId: cmd.parcelId, action: 'DONE', targetBin: cmd.bin?.label });
+      machineState.robot = 'READY';
+      machineState.activeOrderId = null;
+      machineState.activeOrderBin = null;
+    } catch (err: any) {
+      console.error('[ParcelFlow Simulator] Error executing virtual arm command:', err);
+    } finally {
+      isArmBusy = false;
+    }
+  }, 1000);
+}
+
+export function stopSimulatorIntervals() {
+  if (statusBroadcastInterval) {
+    clearInterval(statusBroadcastInterval);
+    statusBroadcastInterval = null;
+  }
+  if (armWorkerInterval) {
+    clearInterval(armWorkerInterval);
+    armWorkerInterval = null;
+  }
 }
 
 export function getMachineState(): MachineState {
@@ -66,6 +159,7 @@ export function getMachineState(): MachineState {
 }
 
 export function startConveyor() {
+  setDesiredConveyor('RUN', 'Conveyor started by operator', ioInstance);
   machineState.conveyor = 'RUNNING';
   machineState.motorRpm = 120;
   if (machineState.robot === 'FAULT') machineState.robot = 'READY';
@@ -74,6 +168,7 @@ export function startConveyor() {
 }
 
 export function stopConveyor() {
+  setDesiredConveyor('STOP', 'Conveyor stopped by operator', ioInstance);
   machineState.conveyor = 'STOPPED';
   machineState.motorRpm = 0;
   ioInstance?.emit('machine:status', machineState);
@@ -81,6 +176,7 @@ export function stopConveyor() {
 }
 
 export function pauseConveyor() {
+  setDesiredConveyor('HOLD', 'Conveyor paused by operator', ioInstance);
   machineState.conveyor = 'PAUSED';
   machineState.motorRpm = 0;
   ioInstance?.emit('machine:status', machineState);
@@ -88,28 +184,24 @@ export function pauseConveyor() {
 }
 
 export function emergencyStop() {
+  triggerEmergencyStop('operator-simulator-estop', ioInstance);
   machineState.conveyor = 'EMERGENCY_STOPPED';
   machineState.motorRpm = 0;
   machineState.sensor = 'IDLE';
   machineState.robot = 'IDLE';
-  isProcessingOrder = false;
+  isArmBusy = false;
   machineState.activeOrderId = null;
+  machineState.activeOrderBin = null;
 
-  // Create an alert
-  const alertId = `alt-es-${Date.now()}`;
-  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  run(`INSERT INTO alerts (id, type, severity, message, resolved, created_at)
-    VALUES (?, 'MACHINE_OFFLINE', 'critical', 'EMERGENCY STOP BUTTON ENGAGED on Conveyor Floor 1. All motors halted.', 0, ?)`,
-    [alertId, now]);
+  ioInstance?.emit('machine:status', machineState);
+  logMachineStatus();
+}
 
-  ioInstance?.emit('alert:created', {
-    id: alertId,
-    type: 'MACHINE_OFFLINE',
-    severity: 'critical',
-    message: 'EMERGENCY STOP BUTTON ENGAGED on Conveyor Floor 1. All motors halted.',
-    created_at: now
-  });
-
+export function resetEmergencyStopUi() {
+  resetEmergencyStop('operator-simulator-reset', ioInstance);
+  machineState.conveyor = 'PAUSED';
+  machineState.motorRpm = 0;
+  machineState.robot = 'READY';
   ioInstance?.emit('machine:status', machineState);
   logMachineStatus();
 }
@@ -131,143 +223,64 @@ export function simulateFault(target: 'wifi' | 'sensor' | 'robot' | 'clear') {
     machineState.wifi = machineState.wifi === 'CONNECTED' ? 'DISCONNECTED' : 'CONNECTED';
     if (machineState.wifi === 'DISCONNECTED') {
       const alertId = `alt-wf-${Date.now()}`;
-      run(`INSERT INTO alerts (id, type, severity, message, resolved, created_at)
-        VALUES (?, 'MACHINE_OFFLINE', 'warning', 'ESP32 Wi-Fi Signal Dropped on AP-Industrial-5GHz.', 0, ?)`,
-        [alertId, now]);
+      run(
+        `INSERT INTO alerts (id, type, severity, message, resolved, created_at)
+         VALUES (?, 'MACHINE_OFFLINE', 'warning', 'ESP32 Wi-Fi Signal Dropped on AP-Industrial-5GHz.', 0, ?)`,
+        [alertId, now]
+      );
       ioInstance?.emit('alert:created', { id: alertId, type: 'MACHINE_OFFLINE', severity: 'warning', message: 'ESP32 Wi-Fi Signal Dropped on AP-Industrial-5GHz.', created_at: now });
     }
   } else if (target === 'sensor') {
     machineState.sensor = 'ACTIVE'; // Stuck active
     const alertId = `alt-sn-${Date.now()}`;
-    run(`INSERT INTO alerts (id, type, severity, message, resolved, created_at)
-      VALUES (?, 'SORT_FAILED', 'warning', 'IR Sensor optical beam occluded or reflection threshold anomaly.', 0, ?)`,
-      [alertId, now]);
+    run(
+      `INSERT INTO alerts (id, type, severity, message, resolved, created_at)
+       VALUES (?, 'SORT_FAILED', 'warning', 'IR Sensor optical beam occluded or reflection threshold anomaly.', 0, ?)`,
+      [alertId, now]
+    );
     ioInstance?.emit('alert:created', { id: alertId, type: 'SORT_FAILED', severity: 'warning', message: 'IR Sensor optical beam occluded or reflection threshold anomaly.', created_at: now });
   } else if (target === 'robot') {
     machineState.robot = 'FAULT';
     const alertId = `alt-rb-${Date.now()}`;
-    run(`INSERT INTO alerts (id, type, severity, message, resolved, created_at)
-      VALUES (?, 'SORT_FAILED', 'critical', 'Robotic Arm Servo 3 Torque Limit Exceeded. Actuator paused.', 0, ?)`,
-      [alertId, now]);
+    run(
+      `INSERT INTO alerts (id, type, severity, message, resolved, created_at)
+       VALUES (?, 'SORT_FAILED', 'critical', 'Robotic Arm Servo 3 Torque Limit Exceeded. Actuator paused.', 0, ?)`,
+      [alertId, now]
+    );
     ioInstance?.emit('alert:created', { id: alertId, type: 'SORT_FAILED', severity: 'critical', message: 'Robotic Arm Servo 3 Torque Limit Exceeded. Actuator paused.', created_at: now });
   }
 
   ioInstance?.emit('machine:status', machineState);
 }
 
-async function processNextOrder() {
-  // Find oldest order in ON_CONVEYOR status
-  const order = queryOne<{ id: string; destination_city: string }>(
-    "SELECT id, destination_city FROM orders WHERE status = 'ON_CONVEYOR' ORDER BY updated_at ASC LIMIT 1"
-  );
-
-  if (!order) return;
-
-  isProcessingOrder = true;
-  const orderId = order.id;
-  const city = order.destination_city;
-
-  // Lookup bin
-  const dest = queryOne<{ bin_label: string }>(
-    "SELECT bin_label FROM destinations WHERE city = ?", [city]
-  ) || queryOne<{ bin_label: string }>("SELECT bin_label FROM destinations WHERE city = 'Other'");
-
-  const assignedBin = dest ? dest.bin_label : 'BOX E';
-
-  machineState.activeOrderId = orderId;
-  machineState.activeOrderCity = city;
-  machineState.activeOrderBin = assignedBin;
-  ioInstance?.emit('machine:status', machineState);
-
-  // Step 1: Conveyor movement & IR Sensor trigger
-  await sleep(1800);
-  machineState.sensor = 'ACTIVE';
-  ioInstance?.emit('sensor:triggered', { orderId });
-  ioInstance?.emit('machine:status', machineState);
-
-  // Transition status to DETECTED
-  updateOrderStatus(orderId, 'DETECTED', 'Parcel detected at IR Sensor Station 1');
-
-  // Step 2: Camera Capture
-  await sleep(800);
-  ioInstance?.emit('camera:frame', {
-    orderId,
-    timestamp: Date.now(),
-    destinationCity: city,
-    dimensions: '22x16x8 cm',
-    barcode: `PF-${orderId.replace('ORD-', '')}-IN`
-  });
-
-  // Step 3: Robot Arm sorting sequence
-  updateOrderStatus(orderId, 'SORTING', `ESP32 commanding Robotic Arm to ${assignedBin}`);
-  machineState.sensor = 'IDLE';
-
-  // Robot: PICKING
-  machineState.robot = 'BUSY';
-  ioInstance?.emit('robot:action', { orderId, action: 'PICKING' });
-  ioInstance?.emit('machine:status', machineState);
-  await sleep(1000);
-
-  // Robot: MOVING
-  ioInstance?.emit('robot:action', { orderId, action: 'MOVING', targetBin: assignedBin });
-  await sleep(1000);
-
-  // Robot: PLACING
-  ioInstance?.emit('robot:action', { orderId, action: 'PLACING', targetBin: assignedBin });
-  await sleep(900);
-
-  // Check if robot is in FAULT state
-  if ((machineState.robot as any) === 'FAULT') {
-    // Record sort failure
-    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    run(`INSERT INTO sorting_logs (id, order_id, detected_at, destination_city, assigned_bin, sort_result, duration_ms)
-      VALUES (?, ?, ?, ?, ?, 'FAILED', ?)`,
-      [`sort-fail-${Date.now()}`, orderId, now, city, assignedBin, 2900]);
-
-    ioInstance?.emit('sorting:completed', { orderId, bin: assignedBin, result: 'FAILED', durationMs: 2900 });
-    isProcessingOrder = false;
-    machineState.activeOrderId = null;
-    ioInstance?.emit('machine:status', machineState);
-    return;
-  }
-
-  // Robot: DONE
-  ioInstance?.emit('robot:action', { orderId, action: 'DONE', targetBin: assignedBin });
-  machineState.robot = 'READY';
-
-  // Step 4: Sort completed!
-  const durationMs = 1350 + Math.floor(Math.random() * 200);
-  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-
-  run(`INSERT INTO sorting_logs (id, order_id, detected_at, destination_city, assigned_bin, sort_result, duration_ms)
-    VALUES (?, ?, ?, ?, ?, 'SUCCESS', ?)`,
-    [`sort-${orderId}-${Date.now()}`, orderId, now, city, assignedBin, durationMs]);
-
-  run(`UPDATE orders SET assigned_bin = ? WHERE id = ?`, [assignedBin, orderId]);
-  updateOrderStatus(orderId, 'SORTED', `Sorted successfully into ${assignedBin} (${city})`);
-
-  ioInstance?.emit('sorting:completed', { orderId, bin: assignedBin, result: 'SUCCESS', durationMs });
-
-  // Brief delay before DISPATCHED
-  await sleep(2500);
-  updateOrderStatus(orderId, 'DISPATCHED', `Dispatched from Fulfillment Hub Bay 4 to ${city}`);
-
-  machineState.activeOrderId = null;
-  machineState.activeOrderCity = null;
-  machineState.activeOrderBin = null;
-  ioInstance?.emit('machine:status', machineState);
-  isProcessingOrder = false;
+/**
+ * Trigger an optical scan through authoritative scanService
+ */
+export function simulateScan(payload: string) {
+  return processScan({ payload, source: 'simulator' }, ioInstance);
 }
 
-export function updateOrderStatus(orderId: string, newStatus: string, note?: string) {
-  transitionOrderStatus(orderId, newStatus, note || `Status updated to ${newStatus}`, ioInstance, true);
+/**
+ * Trigger an IR break-beam sensor through authoritative hardwareService
+ */
+export function simulateIrEvent(sensorId: 'IR1' | 'IR2', state: 'TRIGGERED' | 'CLEAR' = 'TRIGGERED') {
+  irSequenceCounter++;
+  return handleIrEvent({
+    deviceId: 'conveyor-esp32',
+    sensorId,
+    state,
+    seq: irSequenceCounter,
+    ts: Date.now()
+  }, ioInstance);
 }
 
 function logMachineStatus() {
   const logId = `msl-${Date.now()}`;
-  run(`INSERT INTO machine_status_log (id, esp32_status, wifi_status, sensor_status, conveyor_status, robot_status)
-    VALUES (?, ?, ?, ?, ?, ?)`,
-    [logId, machineState.esp32, machineState.wifi, machineState.sensor, machineState.conveyor, machineState.robot]);
+  run(
+    `INSERT INTO machine_status_log (id, esp32_status, wifi_status, sensor_status, conveyor_status, robot_status)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [logId, machineState.esp32, machineState.wifi, machineState.sensor, machineState.conveyor, machineState.robot]
+  );
 }
 
 function sleep(ms: number) {

@@ -9,6 +9,7 @@ import { OperatorDashboard } from './pages/OperatorDashboard';
 import { OperatorOrdersQueue } from './pages/OperatorOrdersQueue';
 import { OperatorPicking } from './pages/OperatorPicking';
 import { OperatorPacking } from './pages/OperatorPacking';
+import { OperatorLabels } from './pages/OperatorLabels';
 import { OperatorConveyor } from './pages/OperatorConveyor';
 import { OperatorInventory } from './pages/OperatorInventory';
 import { OperatorAlerts } from './pages/OperatorAlerts';
@@ -17,8 +18,34 @@ import { OperatorLogs } from './pages/OperatorLogs';
 export const OperatorPortal: React.FC = () => {
   const { showToast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const getTabFromPath = (): string => {
+    const path = window.location.pathname.toLowerCase();
+    const sub = path.replace(/^\/operator\/?/, '').split('/')[0];
+    const validTabs = ['dashboard', 'queue', 'picking', 'packing', 'labels', 'conveyor', 'inventory', 'alerts', 'logs'];
+    if (sub === 'orders') return 'queue';
+    if (validTabs.includes(sub)) return sub;
+    return 'dashboard';
+  };
+
+  const [activeTab, setActiveTab] = useState<string>(getTabFromPath);
   const [selectedOrderId, setSelectedOrderId] = useState<string>('');
+
+  // Sync with browser URL navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      setActiveTab(getTabFromPath());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleSelectTab = (tab: string) => {
+    setActiveTab(tab);
+    const targetUrl = tab === 'dashboard' ? '/operator' : `/operator/${tab}`;
+    if (window.location.pathname.toLowerCase() !== targetUrl) {
+      window.history.pushState(null, '', targetUrl);
+    }
+  };
 
   const [machineState, setMachineState] = useState<MachineState>({
     conveyor: 'RUNNING',
@@ -99,7 +126,7 @@ export const OperatorPortal: React.FC = () => {
       });
       showToast(`Order ${orderId} infeed to conveyor initiated!`, 'success');
       fetchQueue();
-      setActiveTab('conveyor');
+      handleSelectTab('conveyor');
     } catch (err: any) {
       showToast(err.message || 'Failed to infeed parcel', 'error');
     }
@@ -145,7 +172,7 @@ export const OperatorPortal: React.FC = () => {
       <div className="flex-1 flex flex-col md:flex-row">
         <OperatorSidebar
           activeTab={activeTab}
-          onSelectTab={setActiveTab}
+          onSelectTab={handleSelectTab}
           badgeCounts={badgeCounts}
         />
 
@@ -154,7 +181,7 @@ export const OperatorPortal: React.FC = () => {
             <OperatorDashboard
               queue={queue}
               machineState={machineState}
-              onNavigate={setActiveTab}
+              onNavigate={handleSelectTab}
               onSendToConveyor={handleSendToConveyor}
             />
           )}
@@ -165,11 +192,11 @@ export const OperatorPortal: React.FC = () => {
               onAction={handleOrderAction}
               onNavigateToPicking={(id) => {
                 setSelectedOrderId(id);
-                setActiveTab('picking');
+                handleSelectTab('picking');
               }}
               onNavigateToPacking={(id) => {
                 setSelectedOrderId(id);
-                setActiveTab('packing');
+                handleSelectTab('packing');
               }}
               onSendToConveyor={handleSendToConveyor}
             />
@@ -180,7 +207,7 @@ export const OperatorPortal: React.FC = () => {
               selectedOrderId={selectedOrderId}
               onPickingCompleted={() => {
                 fetchQueue();
-                setActiveTab('packing');
+                handleSelectTab('packing');
               }}
             />
           )}
@@ -190,9 +217,13 @@ export const OperatorPortal: React.FC = () => {
               selectedOrderId={selectedOrderId}
               onPackingCompleted={() => {
                 fetchQueue();
-                setActiveTab('conveyor');
+                handleSelectTab('conveyor');
               }}
             />
+          )}
+
+          {activeTab === 'labels' && (
+            <OperatorLabels />
           )}
 
           {activeTab === 'conveyor' && (

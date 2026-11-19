@@ -4,6 +4,7 @@ import {
   ListOrdered,
   ScanLine,
   Boxes,
+  QrCode,
   Cpu,
   PackageCheck,
   AlertTriangle,
@@ -43,9 +44,14 @@ export const OperatorSidebar: React.FC<OperatorSidebarProps> = ({
     },
     {
       id: 'packing',
-      label: 'Packing & Label',
+      label: 'Packing Bay',
       icon: <Boxes className="w-4 h-4" />,
       count: counts.packing
+    },
+    {
+      id: 'labels',
+      label: 'Label Studio',
+      icon: <QrCode className="w-4 h-4 text-teal-400" />
     },
     {
       id: 'conveyor',
