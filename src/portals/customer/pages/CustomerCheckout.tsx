@@ -227,6 +227,11 @@ export const CustomerCheckout: React.FC<CustomerCheckoutProps> = ({
                 <p className="text-xs text-zinc-500 mt-0.5">Transactions are securely processed with 256-bit encryption.</p>
               </div>
 
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
+                <span><strong>Demo payment</strong> &mdash; no real transaction is processed. Do not enter real card details.</span>
+              </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <button
                   type="button"
@@ -410,7 +415,7 @@ export const CustomerCheckout: React.FC<CustomerCheckoutProps> = ({
                         />
                         <div className="truncate">
                           <p className="font-medium text-zinc-900 truncate">{item.name}</p>
-                          <p className="text-[11px] text-zinc-400">Qty: {item.quantity} &bull; Rack: {item.warehouse_rack_location}</p>
+                          <p className="text-[11px] text-zinc-400">Qty: {item.quantity} &bull; {formatINR(item.price)} each</p>
                         </div>
                       </div>
                       <span className="font-bold text-zinc-900 font-mono shrink-0">

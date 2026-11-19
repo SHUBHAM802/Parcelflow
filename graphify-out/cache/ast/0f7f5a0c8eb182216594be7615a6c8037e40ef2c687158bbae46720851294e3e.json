@@ -1,0 +1,66 @@
+{
+    "nodes": [
+        {
+            "id": "d_3rd_year_major_project_parcelflow_src_shared_components_kpicard_tsx",
+            "label": "KPICard.tsx",
+            "file_type": "code",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L1"
+        },
+        {
+            "id": "components_kpicard_kpicardprops",
+            "label": "KPICardProps",
+            "file_type": "code",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L4"
+        },
+        {
+            "id": "components_kpicard_kpicard",
+            "label": "KPICard()",
+            "file_type": "code",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L15"
+        }
+    ],
+    "edges": [
+        {
+            "source": "d_3rd_year_major_project_parcelflow_src_shared_components_kpicard_tsx",
+            "target": "react",
+            "relation": "imports_from",
+            "context": "import",
+            "confidence": "EXTRACTED",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L1",
+            "weight": 1.0
+        },
+        {
+            "source": "d_3rd_year_major_project_parcelflow_src_shared_components_kpicard_tsx",
+            "target": "lucide_react",
+            "relation": "imports_from",
+            "context": "import",
+            "confidence": "EXTRACTED",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L2",
+            "weight": 1.0
+        },
+        {
+            "source": "d_3rd_year_major_project_parcelflow_src_shared_components_kpicard_tsx",
+            "target": "components_kpicard_kpicardprops",
+            "relation": "contains",
+            "confidence": "EXTRACTED",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L4",
+            "weight": 1.0
+        },
+        {
+            "source": "d_3rd_year_major_project_parcelflow_src_shared_components_kpicard_tsx",
+            "target": "components_kpicard_kpicard",
+            "relation": "contains",
+            "confidence": "EXTRACTED",
+            "source_file": "D:\\3rd year\\major project\\parcelflow\\src\\shared\\components\\KPICard.tsx",
+            "source_location": "L15",
+            "weight": 1.0
+        }
+    ],
+    "raw_calls": []
+}
