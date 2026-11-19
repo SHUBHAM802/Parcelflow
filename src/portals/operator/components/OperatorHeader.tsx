@@ -1,8 +1,9 @@
 import React from 'react';
 import { MachineState } from '../../../types';
 import { StatusDotPill } from '../../../shared/components/StatusDotPill';
+import { ParcelFlowLogo } from '../../../shared/components/ParcelFlowLogo';
 import { useAuth } from '../../../shared/store/authContext';
-import { Cpu, Wifi, Video, Activity, Bot, RefreshCw } from 'lucide-react';
+import { Cpu, Wifi, Video, Activity, Bot, RefreshCw, LogOut } from 'lucide-react';
 
 interface OperatorHeaderProps {
   machineState: MachineState;
@@ -10,16 +11,15 @@ interface OperatorHeaderProps {
 }
 
 export const OperatorHeader: React.FC<OperatorHeaderProps> = ({ machineState, onRefresh }) => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
 
   return (
-    <header className="sticky top-[37px] z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
+    <header className="sticky top-0 z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        {/* Title */}
+        {/* Title & Brand */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-teal-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-            WH
-          </div>
+          <ParcelFlowLogo variant="compact" size="md" theme="dark" />
+          <div className="h-6 w-px bg-zinc-800 hidden sm:block" />
           <div>
             <div className="text-sm font-bold tracking-tight flex items-center gap-2">
               <span>Warehouse Floor Control</span>
@@ -82,6 +82,14 @@ export const OperatorHeader: React.FC<OperatorHeaderProps> = ({ machineState, on
             <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
             <span className="font-mono text-zinc-300 text-[11px]">{machineState.motorRpm} RPM</span>
           </div>
+          <button
+            onClick={logout}
+            className="p-1.5 rounded-md hover:bg-zinc-800 text-zinc-400 hover:text-rose-400 transition-colors cursor-pointer"
+            title="Log out"
+            aria-label="Log out"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </header>
