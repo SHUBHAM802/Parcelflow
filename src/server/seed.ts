@@ -62,6 +62,67 @@ export async function seedDatabase(db: Database) {
     db.run("INSERT INTO destinations (id, city, bin_label) VALUES (?, ?, ?)", [d.id, d.city, d.bin_label]);
   }
 
+  // 3b. Bins (physical prototype - 7 bins with 7-servo kinematic presets)
+  const bins = [
+    { id: 'bin-1', bin_number: 1, label: 'DELHI HUB (BIN 1)', category_id: 'cat-electronics', is_overflow: 0, is_disposable_fallback: 0, servo_preset_json: '{"base":35,"shoulder":80,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}' },
+    { id: 'bin-2', bin_number: 2, label: 'MAHARASHTRA HUB (BIN 2)', category_id: 'cat-fashion', is_overflow: 0, is_disposable_fallback: 0, servo_preset_json: '{"base":65,"shoulder":85,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}' },
+    { id: 'bin-3', bin_number: 3, label: 'PUNE METRO (BIN 3)', category_id: 'cat-books', is_overflow: 0, is_disposable_fallback: 0, servo_preset_json: '{"base":90,"shoulder":85,"elbow":115,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}' },
+    { id: 'bin-4', bin_number: 4, label: 'NORTH EXPRESS (BIN 4)', category_id: null, is_overflow: 1, is_disposable_fallback: 0, servo_preset_json: '{"base":115,"shoulder":80,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}' },
+    { id: 'bin-5', bin_number: 5, label: 'SOUTH EXPRESS (BIN 5)', category_id: null, is_overflow: 0, is_disposable_fallback: 0, servo_preset_json: '{"base":140,"shoulder":75,"elbow":105,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}' },
+    { id: 'bin-6', bin_number: 6, label: 'EAST EXPRESS (BIN 6)', category_id: null, is_overflow: 0, is_disposable_fallback: 0, servo_preset_json: '{"base":160,"shoulder":75,"elbow":100,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}' },
+    { id: 'bin-7', bin_number: 7, label: 'DISPOSABLE / REJECT (BIN 7)', category_id: null, is_overflow: 1, is_disposable_fallback: 1, servo_preset_json: '{"base":180,"shoulder":70,"elbow":95,"wrist_pitch":80,"wrist_roll":90,"gripper":110,"aux":90}' },
+  ];
+
+  const binSeedTime = new Date().toISOString().replace('T', ' ').substring(0, 19);
+  for (const b of bins) {
+    db.run(
+      "INSERT INTO bins (id, bin_number, label, category_id, is_overflow, is_disposable_fallback, servo_preset_json, is_active, parcel_count, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 0, ?)",
+      [b.id, b.bin_number, b.label, b.category_id, b.is_overflow, b.is_disposable_fallback, b.servo_preset_json, binSeedTime]
+    );
+  }
+
+  // 3b-2. Predefined QR Destination Route Profiles (6 standard + 1 disposable fallback)
+  const routeProfiles = [
+    { id: 'prof-delhi', code: 'DEL', name: 'Delhi Capital Hub', city: 'Delhi', target_bin_id: 'bin-1', is_disposable: 0, payload: 'PF1.ROUTE.DEL.d3l9a8b7c6', notes: 'Priority sorting for Northern NCR hub' },
+    { id: 'prof-maharashtra', code: 'MH', name: 'Maharashtra Regional Gateway', city: 'Mumbai', target_bin_id: 'bin-2', is_disposable: 0, payload: 'PF1.ROUTE.MH.m4h5b6c7d8', notes: 'State distribution for West zone & Mumbai' },
+    { id: 'prof-pune', code: 'PN', name: 'Pune Metro Express', city: 'Pune', target_bin_id: 'bin-3', is_disposable: 0, payload: 'PF1.ROUTE.PN.p9n8e7d6c5', notes: 'Local automated fulfillment for Pune & PCMC' },
+    { id: 'prof-hub4', code: 'HUB4', name: 'Bengaluru Tech Corridor', city: 'Bengaluru', target_bin_id: 'bin-4', is_disposable: 0, payload: 'PF1.ROUTE.HUB4.b4e5n6g7h8', notes: 'South-Central express destination (configurable)' },
+    { id: 'prof-hub5', code: 'HUB5', name: 'Hyderabad Deccan Gateway', city: 'Hyderabad', target_bin_id: 'bin-5', is_disposable: 0, payload: 'PF1.ROUTE.HUB5.h5y6d7e8r9', notes: 'South regional gateway hub (configurable)' },
+    { id: 'prof-hub6', code: 'HUB6', name: 'Kolkata East Terminal', city: 'Kolkata', target_bin_id: 'bin-6', is_disposable: 0, payload: 'PF1.ROUTE.HUB6.k6o7l8k9a0', notes: 'Eastern logistics arterial link (configurable)' },
+    { id: 'prof-fallback', code: 'FALLBACK', name: 'Disposable / Unreadable Reject', city: 'Unknown', target_bin_id: 'bin-7', is_disposable: 1, payload: 'PF1.ROUTE.FALLBACK.f0a1l2l3b4', notes: 'Safety catch-all for damaged/unregistered/foreign barcodes' }
+  ];
+
+  for (const rp of routeProfiles) {
+    db.run(
+      "INSERT OR REPLACE INTO qr_route_profiles (id, code, name, city, target_bin_id, is_disposable_fallback, is_active, qr_code_payload, notes, updated_at) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?, ?)",
+      [rp.id, rp.code, rp.name, rp.city, rp.target_bin_id, rp.is_disposable, rp.payload, rp.notes, binSeedTime]
+    );
+  }
+
+  // 3b-3. Servo Calibration records (PCA9685 CH0-CH6)
+  const servoCalibrations = [
+    { id: 'calib-0', joint_index: 0, joint_name: 'Base (Waist Rotation)', servo_model: 'MG996R', pca_channel: 0, min_angle: 0, max_angle: 180, min_pulse_us: 500, max_pulse_us: 2500, default_angle: 90 },
+    { id: 'calib-1', joint_index: 1, joint_name: 'Shoulder (Arm Pitch)', servo_model: 'MG996R', pca_channel: 1, min_angle: 15, max_angle: 165, min_pulse_us: 500, max_pulse_us: 2500, default_angle: 85 },
+    { id: 'calib-2', joint_index: 2, joint_name: 'Elbow (Forearm Lift)', servo_model: 'MG996R', pca_channel: 2, min_angle: 15, max_angle: 165, min_pulse_us: 500, max_pulse_us: 2500, default_angle: 105 },
+    { id: 'calib-3', joint_index: 3, joint_name: 'Wrist Pitch (End Effector Tilt)', servo_model: 'MG996R', pca_channel: 3, min_angle: 0, max_angle: 180, min_pulse_us: 500, max_pulse_us: 2500, default_angle: 85 },
+    { id: 'calib-4', joint_index: 4, joint_name: 'Wrist Roll (End Effector Swivel)', servo_model: 'MG90S', pca_channel: 4, min_angle: 0, max_angle: 180, min_pulse_us: 500, max_pulse_us: 2500, default_angle: 90 },
+    { id: 'calib-5', joint_index: 5, joint_name: 'Gripper (Claw Clamp)', servo_model: 'MG90S', pca_channel: 5, min_angle: 30, max_angle: 125, min_pulse_us: 600, max_pulse_us: 2400, default_angle: 50 },
+    { id: 'calib-6', joint_index: 6, joint_name: 'Auxiliary (Stabilizer / Cam)', servo_model: 'MG90S', pca_channel: 6, min_angle: 0, max_angle: 180, min_pulse_us: 500, max_pulse_us: 2500, default_angle: 90 },
+  ];
+
+  for (const sc of servoCalibrations) {
+    db.run(
+      "INSERT OR REPLACE INTO servo_calibration (id, joint_index, joint_name, servo_model, pca_channel, min_angle, max_angle, min_pulse_us, max_pulse_us, default_angle, trim_offset, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+      [sc.id, sc.joint_index, sc.joint_name, sc.servo_model, sc.pca_channel, sc.min_angle, sc.max_angle, sc.min_pulse_us, sc.max_pulse_us, sc.default_angle, binSeedTime]
+    );
+  }
+
+  // 3c. Pipeline initial state
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_desired', 'STOP', ?)", [binSeedTime]);
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_revision', '1', ?)", [binSeedTime]);
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_speed_pct', '100', ?)", [binSeedTime]);
+  db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('estop_active', 'false', ?)", [binSeedTime]);
+
   // 4. Products (~40 realistic Indian-market items)
   const products = [
     // Electronics

@@ -5,10 +5,10 @@ import { apiFetch } from '../../../shared/lib/api';
 import { Button } from '../../../shared/components/Button';
 import { Modal } from '../../../shared/components/Modal';
 import { useToast } from '../../../shared/store/toastContext';
-import { User, MapPin, Plus, Trash2, CheckCircle2, Shield, Phone, Mail } from 'lucide-react';
+import { User, MapPin, Plus, Trash2, CheckCircle2, Shield, Phone, Mail, LogOut } from 'lucide-react';
 
 export const CustomerProfile: React.FC = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { showToast } = useToast();
   const [addresses, setAddresses] = useState<Address[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -104,6 +104,17 @@ export const CustomerProfile: React.FC = () => {
               <Shield className="w-4 h-4 text-zinc-400 shrink-0" />
               <span>Role-Based Access: {user?.role}</span>
             </div>
+          </div>
+
+          <div className="pt-2 border-t border-zinc-100">
+            <button
+              id="customer-profile-logout-btn"
+              onClick={logout}
+              className="w-full flex items-center justify-center gap-2 py-2 px-3 text-xs font-medium text-rose-600 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-xl transition-colors cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Sign Out of Account</span>
+            </button>
           </div>
         </div>
 

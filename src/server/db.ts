@@ -6,8 +6,96 @@ import { seedDatabase } from './seed';
 import { hashPassword } from './auth';
 
 let dbInstance: Database | null = null;
-const DB_FILE = path.join(process.cwd(), 'parcelflow.sqlite');
+let DB_FILE = path.join(process.cwd(), process.env.DATABASE_PATH || 'parcelflow.sqlite');
 
+// ────────────────────────────────────────────────────────────
+// Atomic persistence
+// ────────────────────────────────────────────────────────────
+let inTransaction = false;
+let saveDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const SAVE_DEBOUNCE_MS = 200;
+
+/**
+ * Persist the in-memory database to disk atomically.
+ * Writes to a .tmp file first, then renames (which is atomic on most OS).
+ * Keeps one rolling .bak copy.
+ */
+export function saveDb(immediate = false) {
+  if (!dbInstance || inTransaction) return;
+
+  // Debounce unless immediate flush requested
+  if (!immediate && saveDebounceTimer) return;
+  if (!immediate) {
+    saveDebounceTimer = setTimeout(() => {
+      saveDebounceTimer = null;
+      doSave();
+    }, SAVE_DEBOUNCE_MS);
+    return;
+  }
+
+  doSave();
+}
+
+function doSave() {
+  if (!dbInstance) return;
+  try {
+    const data = dbInstance.export();
+    const tmpFile = DB_FILE + '.tmp';
+    const bakFile = DB_FILE + '.bak';
+
+    // Write to temp file first
+    fs.writeFileSync(tmpFile, Buffer.from(data));
+
+    // Rotate: current -> .bak
+    if (fs.existsSync(DB_FILE)) {
+      try {
+        fs.copyFileSync(DB_FILE, bakFile);
+      } catch (bakErr) {
+        if (process.env.NODE_ENV !== 'test') {
+          console.warn('[ParcelFlow] Warning: could not create .bak:', bakErr);
+        }
+      }
+    }
+
+    // Atomic rename: .tmp -> main with Windows EPERM/EBUSY fallback
+    try {
+      fs.renameSync(tmpFile, DB_FILE);
+    } catch (renameErr: any) {
+      if ((process.platform === 'win32' || renameErr.code === 'EPERM' || renameErr.code === 'EBUSY') && fs.existsSync(tmpFile)) {
+        let copied = false;
+        for (let attempt = 0; attempt < 3 && !copied; attempt++) {
+          try {
+            fs.copyFileSync(tmpFile, DB_FILE);
+            copied = true;
+          } catch (copyErr: any) {
+            if (attempt === 2 && process.env.NODE_ENV !== 'test') {
+              throw copyErr;
+            }
+          }
+        }
+        try { fs.unlinkSync(tmpFile); } catch {}
+      } else if (!fs.existsSync(DB_FILE)) {
+        throw renameErr;
+      }
+    }
+  } catch (e) {
+    if (process.env.NODE_ENV !== 'test') {
+      console.error('[ParcelFlow] Failed to persist database to disk:', e);
+    }
+  }
+}
+
+function flushSave() {
+  if (saveDebounceTimer) {
+    clearTimeout(saveDebounceTimer);
+    saveDebounceTimer = null;
+  }
+  doSave();
+}
+
+// ────────────────────────────────────────────────────────────
+// Pragmas and indexes
+// ────────────────────────────────────────────────────────────
 function applyPragmasAndIndexes(db: Database) {
   db.run("PRAGMA foreign_keys = ON;");
   db.run(`
@@ -23,7 +111,284 @@ function applyPragmasAndIndexes(db: Database) {
     CREATE INDEX IF NOT EXISTS idx_sorting_logs_order_id ON sorting_logs(order_id);
     CREATE INDEX IF NOT EXISTS idx_cart_items_customer_id ON cart_items(customer_id);
     CREATE INDEX IF NOT EXISTS idx_addresses_customer_id ON addresses(customer_id);
+    CREATE INDEX IF NOT EXISTS idx_password_reset_tokens_user_id ON password_reset_tokens(user_id);
+    CREATE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid);
   `);
+}
+
+// ────────────────────────────────────────────────────────────
+// Schema migrations (recorded in schema_migrations table)
+// ────────────────────────────────────────────────────────────
+function ensureMigrationsTable(db: Database) {
+  db.run(`
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT DEFAULT (datetime('now'))
+    );
+  `);
+}
+
+function hasMigration(db: Database, id: string): boolean {
+  const stmt = db.prepare("SELECT 1 FROM schema_migrations WHERE id = ?");
+  stmt.bind([id]);
+  const has = stmt.step();
+  stmt.free();
+  return !!has;
+}
+
+function recordMigration(db: Database, id: string) {
+  db.run("INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)", [id]);
+}
+
+function runMigrations(db: Database) {
+  ensureMigrationsTable(db);
+
+  // Migration 001: password_reset_tokens
+  if (!hasMigration(db, '001_password_reset_tokens')) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS password_reset_tokens (
+        id TEXT PRIMARY KEY,
+        user_id TEXT REFERENCES users(id),
+        token TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        used INTEGER DEFAULT 0,
+        created_at TEXT DEFAULT (datetime('now'))
+      );
+    `);
+    recordMigration(db, '001_password_reset_tokens');
+  }
+
+  // Migration 002: add avatar_url and firebase_uid to users
+  if (!hasMigration(db, '002_user_firebase_columns')) {
+    try { db.run("ALTER TABLE users ADD COLUMN avatar_url TEXT;"); } catch {}
+    try { db.run("ALTER TABLE users ADD COLUMN firebase_uid TEXT;"); } catch {}
+    recordMigration(db, '002_user_firebase_columns');
+  }
+
+  // Migration 003: bins table (category-based routing)
+  if (!hasMigration(db, '003_bins_table')) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS bins (
+        id               TEXT PRIMARY KEY,
+        bin_number       INTEGER NOT NULL UNIQUE,
+        label            TEXT NOT NULL,
+        category_id      TEXT REFERENCES categories(id),
+        is_overflow      INTEGER NOT NULL DEFAULT 0,
+        servo_preset_json TEXT NOT NULL DEFAULT '{"base":90,"shoulder":90,"elbow":90,"wrist":90}',
+        is_active        INTEGER NOT NULL DEFAULT 1,
+        parcel_count     INTEGER NOT NULL DEFAULT 0,
+        updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    recordMigration(db, '003_bins_table');
+  }
+
+  // Migration 003b: ensure default bins map to REAL product categories (Electronics, Fashion, Books, Overflow)
+  if (!hasMigration(db, '003b_default_category_bins')) {
+    db.run(`
+      INSERT OR REPLACE INTO bins (id, bin_number, label, category_id, is_overflow, servo_preset_json, is_active, parcel_count, updated_at)
+      VALUES
+        ('bin-1', 1, 'BIN 1', 'cat-electronics', 0, '{"base":45,"shoulder":90,"elbow":120,"wrist":90}', 1, 0, datetime('now')),
+        ('bin-2', 2, 'BIN 2', 'cat-fashion', 0, '{"base":90,"shoulder":85,"elbow":110,"wrist":90}', 1, 0, datetime('now')),
+        ('bin-3', 3, 'BIN 3', 'cat-books', 0, '{"base":135,"shoulder":80,"elbow":105,"wrist":90}', 1, 0, datetime('now')),
+        ('bin-4', 4, 'BIN 4', NULL, 1, '{"base":170,"shoulder":75,"elbow":100,"wrist":90}', 1, 0, datetime('now'));
+    `);
+    recordMigration(db, '003b_default_category_bins');
+  }
+
+  // Migration 004: parcels table
+  if (!hasMigration(db, '004_parcels_table')) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS parcels (
+        id                TEXT PRIMARY KEY,
+        order_id          TEXT NOT NULL REFERENCES orders(id),
+        label_version     INTEGER NOT NULL DEFAULT 1,
+        label_payload     TEXT NOT NULL UNIQUE,
+        label_print_count INTEGER NOT NULL DEFAULT 0,
+        first_printed_at  TEXT,
+        last_printed_at   TEXT,
+        status            TEXT NOT NULL DEFAULT 'LABELED',
+        assigned_bin_id   TEXT REFERENCES bins(id),
+        scanned_at        TEXT,
+        at_pick_point_at  TEXT,
+        sorted_at         TEXT,
+        created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_parcels_order ON parcels(order_id);
+      CREATE INDEX IF NOT EXISTS idx_parcels_status ON parcels(status);
+    `);
+    recordMigration(db, '004_parcels_table');
+  }
+
+  // Migration 005: scan_events
+  if (!hasMigration(db, '005_scan_events')) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS scan_events (
+        id            TEXT PRIMARY KEY,
+        parcel_id     TEXT REFERENCES parcels(id),
+        raw_payload   TEXT NOT NULL,
+        source        TEXT NOT NULL,
+        result        TEXT NOT NULL,
+        reason        TEXT,
+        operator_id   TEXT REFERENCES users(id),
+        device_id     TEXT,
+        decode_ms     INTEGER,
+        created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_scan_created ON scan_events(created_at);
+    `);
+    recordMigration(db, '005_scan_events');
+  }
+
+  // Migration 006: hardware_commands, device_heartbeats, pipeline_faults
+  if (!hasMigration(db, '006_hardware_commands')) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS hardware_commands (
+        id              TEXT PRIMARY KEY,
+        device_id       TEXT NOT NULL,
+        type            TEXT NOT NULL,
+        parcel_id       TEXT REFERENCES parcels(id),
+        bin_id          TEXT REFERENCES bins(id),
+        payload_json    TEXT NOT NULL DEFAULT '{}',
+        status          TEXT NOT NULL DEFAULT 'QUEUED',
+        attempts        INTEGER NOT NULL DEFAULT 0,
+        idempotency_key TEXT NOT NULL UNIQUE,
+        expires_at      TEXT,
+        created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        completed_at    TEXT,
+        failure_reason  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_cmd_device_status ON hardware_commands(device_id, status);
+
+      CREATE TABLE IF NOT EXISTS device_heartbeats (
+        device_id    TEXT PRIMARY KEY,
+        last_seen_at TEXT NOT NULL,
+        firmware     TEXT,
+        rssi         INTEGER,
+        state_json   TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS pipeline_faults (
+        id           TEXT PRIMARY KEY,
+        type         TEXT NOT NULL,
+        parcel_id    TEXT,
+        detail       TEXT,
+        created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+        acked_at     TEXT,
+        acked_by     TEXT
+      );
+    `);
+    recordMigration(db, '006_hardware_commands');
+  }
+
+  // Migration 007: add assigned_bin_id and is_demo to orders
+  if (!hasMigration(db, '007_order_bin_id')) {
+    try { db.run("ALTER TABLE orders ADD COLUMN assigned_bin_id TEXT REFERENCES bins(id);"); } catch {}
+    try { db.run("ALTER TABLE orders ADD COLUMN is_demo INTEGER DEFAULT 0;"); } catch {}
+    recordMigration(db, '007_order_bin_id');
+  }
+
+  // Migration 008: pipeline_state for conveyor desired state
+  if (!hasMigration(db, '008_pipeline_state')) {
+    db.run(`
+      CREATE TABLE IF NOT EXISTS pipeline_state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+    // Initialize default values
+    const now = new Date().toISOString();
+    db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_desired', 'STOP', ?)", [now]);
+    db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_revision', '1', ?)", [now]);
+    db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('conveyor_speed_pct', '100', ?)", [now]);
+    db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('estop_active', 'false', ?)", [now]);
+    recordMigration(db, '008_pipeline_state');
+  }
+
+  // Migration 009: 7-joint servo arm, 6 QR destination route profiles + disposable fallback bin
+  if (!hasMigration(db, '009_seven_joint_and_route_profiles')) {
+    try { db.run("ALTER TABLE bins ADD COLUMN is_disposable_fallback INTEGER NOT NULL DEFAULT 0;"); } catch {}
+    
+    db.run(`
+      CREATE TABLE IF NOT EXISTS qr_route_profiles (
+        id                      TEXT PRIMARY KEY,
+        code                    TEXT UNIQUE NOT NULL,
+        name                    TEXT NOT NULL,
+        city                    TEXT NOT NULL,
+        target_bin_id           TEXT NOT NULL REFERENCES bins(id),
+        is_disposable_fallback  INTEGER NOT NULL DEFAULT 0,
+        is_active               INTEGER NOT NULL DEFAULT 1,
+        qr_code_payload         TEXT NOT NULL UNIQUE,
+        notes                   TEXT,
+        created_at              TEXT DEFAULT (datetime('now')),
+        updated_at              TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_route_profiles_code ON qr_route_profiles(code);
+      CREATE INDEX IF NOT EXISTS idx_route_profiles_city ON qr_route_profiles(city);
+
+      CREATE TABLE IF NOT EXISTS servo_calibration (
+        id            TEXT PRIMARY KEY,
+        joint_index   INTEGER NOT NULL UNIQUE,
+        joint_name    TEXT NOT NULL,
+        servo_model   TEXT NOT NULL CHECK(servo_model IN ('MG996R', 'MG90S')),
+        pca_channel   INTEGER NOT NULL UNIQUE,
+        min_angle     INTEGER NOT NULL DEFAULT 0,
+        max_angle     INTEGER NOT NULL DEFAULT 180,
+        min_pulse_us  INTEGER NOT NULL DEFAULT 500,
+        max_pulse_us  INTEGER NOT NULL DEFAULT 2500,
+        default_angle INTEGER NOT NULL DEFAULT 90,
+        trim_offset   INTEGER NOT NULL DEFAULT 0,
+        updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    // Ensure bin-4 is overflow and bin-7 is fallback
+    db.run("UPDATE bins SET is_overflow = 1 WHERE bin_number = 4;");
+
+    // Insert 7 physical bins (6 destinations + 1 disposable fallback)
+    db.run(`
+      INSERT OR REPLACE INTO bins (id, bin_number, label, category_id, is_overflow, is_disposable_fallback, servo_preset_json, is_active, parcel_count, updated_at)
+      VALUES
+        ('bin-1', 1, 'DELHI HUB (BIN 1)', 'cat-electronics', 0, 0, '{"base":35,"shoulder":80,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-2', 2, 'MAHARASHTRA HUB (BIN 2)', 'cat-fashion', 0, 0, '{"base":65,"shoulder":85,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-3', 3, 'PUNE METRO (BIN 3)', 'cat-books', 0, 0, '{"base":90,"shoulder":85,"elbow":115,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-4', 4, 'NORTH EXPRESS (BIN 4)', NULL, 1, 0, '{"base":115,"shoulder":80,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-5', 5, 'SOUTH EXPRESS (BIN 5)', NULL, 0, 0, '{"base":140,"shoulder":75,"elbow":105,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-6', 6, 'EAST EXPRESS (BIN 6)', NULL, 0, 0, '{"base":160,"shoulder":75,"elbow":100,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-7', 7, 'DISPOSABLE / REJECT (BIN 7)', NULL, 1, 1, '{"base":180,"shoulder":70,"elbow":95,"wrist_pitch":80,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now'));
+    `);
+
+    // Insert 6 destination route profiles + 1 disposable fallback profile
+    db.run(`
+      INSERT OR REPLACE INTO qr_route_profiles (id, code, name, city, target_bin_id, is_disposable_fallback, is_active, qr_code_payload, notes, updated_at)
+      VALUES
+        ('prof-delhi', 'DEL', 'Delhi Capital Hub', 'Delhi', 'bin-1', 0, 1, 'PF1.ROUTE.DEL.d3l9a8b7c6', 'Priority sorting for Northern NCR hub', datetime('now')),
+        ('prof-maharashtra', 'MH', 'Maharashtra Regional Gateway', 'Mumbai', 'bin-2', 0, 1, 'PF1.ROUTE.MH.m4h5b6c7d8', 'State distribution for West zone & Mumbai', datetime('now')),
+        ('prof-pune', 'PN', 'Pune Metro Express', 'Pune', 'bin-3', 0, 1, 'PF1.ROUTE.PN.p9n8e7d6c5', 'Local automated fulfillment for Pune & PCMC', datetime('now')),
+        ('prof-hub4', 'HUB4', 'Bengaluru Tech Corridor', 'Bengaluru', 'bin-4', 0, 1, 'PF1.ROUTE.HUB4.b4e5n6g7h8', 'South-Central express destination (configurable)', datetime('now')),
+        ('prof-hub5', 'HUB5', 'Hyderabad Deccan Gateway', 'Hyderabad', 'bin-5', 0, 1, 'PF1.ROUTE.HUB5.h5y6d7e8r9', 'South regional gateway hub (configurable)', datetime('now')),
+        ('prof-hub6', 'HUB6', 'Kolkata East Terminal', 'Kolkata', 'bin-6', 0, 1, 'PF1.ROUTE.HUB6.k6o7l8k9a0', 'Eastern logistics arterial link (configurable)', datetime('now')),
+        ('prof-fallback', 'FALLBACK', 'Disposable / Unreadable Reject', 'Unknown', 'bin-7', 1, 1, 'PF1.ROUTE.FALLBACK.f0a1l2l3b4', 'Safety catch-all for damaged/unregistered/foreign barcodes', datetime('now'));
+    `);
+
+    // Insert 7 servo calibration channels (PCA9685 CH0-CH6)
+    db.run(`
+      INSERT OR REPLACE INTO servo_calibration (id, joint_index, joint_name, servo_model, pca_channel, min_angle, max_angle, min_pulse_us, max_pulse_us, default_angle, trim_offset, updated_at)
+      VALUES
+        ('calib-0', 0, 'Base (Waist Rotation)', 'MG996R', 0, 0, 180, 500, 2500, 90, 0, datetime('now')),
+        ('calib-1', 1, 'Shoulder (Arm Pitch)', 'MG996R', 1, 15, 165, 500, 2500, 85, 0, datetime('now')),
+        ('calib-2', 2, 'Elbow (Forearm Lift)', 'MG996R', 2, 15, 165, 500, 2500, 105, 0, datetime('now')),
+        ('calib-3', 3, 'Wrist Pitch (End Effector Tilt)', 'MG996R', 3, 0, 180, 500, 2500, 85, 0, datetime('now')),
+        ('calib-4', 4, 'Wrist Roll (End Effector Swivel)', 'MG90S', 4, 0, 180, 500, 2500, 90, 0, datetime('now')),
+        ('calib-5', 5, 'Gripper (Claw Clamp)', 'MG90S', 5, 30, 125, 600, 2400, 50, 0, datetime('now')),
+        ('calib-6', 6, 'Auxiliary (Stabilizer / Cam)', 'MG90S', 6, 0, 180, 500, 2500, 90, 0, datetime('now'));
+    `);
+
+    recordMigration(db, '009_seven_joint_and_route_profiles');
+  }
 }
 
 function migrateUserPasswords(db: Database) {
@@ -34,58 +399,86 @@ function migrateUserPasswords(db: Database) {
         const uId = row[0] as string;
         const uPass = row[1] as string;
         if (uPass && !uPass.includes(':')) {
+          // Plain text password — hash it
           const hashed = hashPassword(uPass);
           db.run("UPDATE users SET password_hash = ? WHERE id = ?", [hashed, uId]);
+        } else if (uPass) {
+          const parts = uPass.split(':');
+          if (parts.length === 2) {
+            // Legacy format (salt:hash with 10k iterations) — re-hash not possible without plaintext
+            // These will be re-hashed on next successful login
+          }
         }
       }
     }
   } catch (err) {
-    console.error('Password migration error:', err);
+    console.error('[ParcelFlow] Password migration error:', err);
   }
 }
 
+// ────────────────────────────────────────────────────────────
+// Database initialization
+// ────────────────────────────────────────────────────────────
 export async function getDb(): Promise<Database> {
   if (dbInstance) return dbInstance;
 
   const SQL = await initSqlJs();
+  const dbPath = process.env.DATABASE_PATH
+    ? path.join(process.cwd(), process.env.DATABASE_PATH)
+    : DB_FILE;
+  DB_FILE = dbPath;
 
-  if (fs.existsSync(DB_FILE)) {
+  if (fs.existsSync(dbPath)) {
     try {
-      const buffer = fs.readFileSync(DB_FILE);
+      const buffer = fs.readFileSync(dbPath);
       dbInstance = new SQL.Database(buffer);
+
       // Migrate seed emails to @parcelflow.com if needed
       dbInstance.run("UPDATE users SET email = 'rahul@parcelflow.com' WHERE email = 'rahul@parcelflow.demo'");
       dbInstance.run("UPDATE users SET email = 'operator@parcelflow.com' WHERE email = 'operator@parcelflow.demo'");
       dbInstance.run("UPDATE users SET email = 'admin@parcelflow.com' WHERE email = 'admin@parcelflow.demo'");
+
+      runMigrations(dbInstance);
+      dbInstance.run("UPDATE bins SET is_overflow = 1 WHERE bin_number = 4;");
       applyPragmasAndIndexes(dbInstance);
       migrateUserPasswords(dbInstance);
-      saveDb();
+      flushSave();
       return dbInstance;
     } catch (e) {
-      console.error('Failed to load existing database file, creating fresh one', e);
+      console.error('[ParcelFlow] Failed to load database, trying .bak', e);
+
+      // Try the backup
+      const bakPath = dbPath + '.bak';
+      if (fs.existsSync(bakPath)) {
+        try {
+          console.warn('[ParcelFlow] Loading database from .bak file');
+          const buffer = fs.readFileSync(bakPath);
+          dbInstance = new SQL.Database(buffer);
+          runMigrations(dbInstance);
+          applyPragmasAndIndexes(dbInstance);
+          migrateUserPasswords(dbInstance);
+          flushSave();
+          return dbInstance;
+        } catch (bakErr) {
+          console.error('[ParcelFlow] .bak also failed, creating fresh DB', bakErr);
+        }
+      }
     }
   }
 
+  // Fresh database
   dbInstance = new SQL.Database();
   await initSchemaAndSeed(dbInstance);
+  runMigrations(dbInstance);
   applyPragmasAndIndexes(dbInstance);
   migrateUserPasswords(dbInstance);
-  saveDb();
+  flushSave();
   return dbInstance;
 }
 
-let inTransaction = false;
-
-export function saveDb() {
-  if (!dbInstance || inTransaction) return;
-  try {
-    const data = dbInstance.export();
-    fs.writeFileSync(DB_FILE, Buffer.from(data));
-  } catch (e) {
-    console.error('Failed to persist database to disk', e);
-  }
-}
-
+// ────────────────────────────────────────────────────────────
+// Query helpers
+// ────────────────────────────────────────────────────────────
 export function transaction<T>(fn: () => T): T {
   if (!dbInstance) throw new Error('Database not initialized');
   inTransaction = true;
@@ -94,7 +487,7 @@ export function transaction<T>(fn: () => T): T {
     const result = fn();
     dbInstance.run("COMMIT");
     inTransaction = false;
-    saveDb();
+    flushSave(); // Immediate flush after transaction
     return result;
   } catch (err) {
     try {
@@ -136,6 +529,9 @@ export function run(sql: string, params: any[] = []): void {
   saveDb();
 }
 
+// ────────────────────────────────────────────────────────────
+// Schema creation (fresh database)
+// ────────────────────────────────────────────────────────────
 async function initSchemaAndSeed(db: Database) {
   // Schema creation
   db.run(`
@@ -146,6 +542,8 @@ async function initSchemaAndSeed(db: Database) {
       password_hash TEXT NOT NULL,
       role TEXT CHECK(role IN ('customer','operator','admin')) NOT NULL,
       phone TEXT,
+      avatar_url TEXT,
+      firebase_uid TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -220,6 +618,8 @@ async function initSchemaAndSeed(db: Database) {
       gst_amount REAL NOT NULL,
       total_amount REAL NOT NULL,
       assigned_bin TEXT,
+      assigned_bin_id TEXT REFERENCES bins(id),
+      is_demo INTEGER DEFAULT 0,
       created_at TEXT DEFAULT (datetime('now')),
       updated_at TEXT DEFAULT (datetime('now'))
     );
@@ -237,6 +637,7 @@ async function initSchemaAndSeed(db: Database) {
       order_id TEXT REFERENCES orders(id),
       status TEXT NOT NULL,
       note TEXT,
+      changed_by TEXT,
       changed_at TEXT DEFAULT (datetime('now'))
     );
 
@@ -280,9 +681,11 @@ async function initSchemaAndSeed(db: Database) {
     CREATE TABLE IF NOT EXISTS sorting_logs (
       id TEXT PRIMARY KEY,
       order_id TEXT REFERENCES orders(id),
+      parcel_id TEXT REFERENCES parcels(id),
       detected_at TEXT,
       destination_city TEXT,
       assigned_bin TEXT,
+      assigned_bin_id TEXT REFERENCES bins(id),
       sort_result TEXT CHECK(sort_result IN ('SUCCESS','FAILED','MANUAL_OVERRIDE')),
       duration_ms INTEGER
     );
@@ -312,6 +715,133 @@ async function initSchemaAndSeed(db: Database) {
       description TEXT NOT NULL,
       amount REAL NOT NULL,
       date TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS password_reset_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id),
+      token TEXT NOT NULL,
+      expires_at TEXT NOT NULL,
+      used INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS bins (
+      id               TEXT PRIMARY KEY,
+      bin_number       INTEGER NOT NULL UNIQUE,
+      label            TEXT NOT NULL,
+      category_id      TEXT REFERENCES categories(id),
+      is_overflow      INTEGER NOT NULL DEFAULT 0,
+      is_disposable_fallback INTEGER NOT NULL DEFAULT 0,
+      servo_preset_json TEXT NOT NULL DEFAULT '{"base":90,"shoulder":90,"elbow":90,"wrist_pitch":90,"wrist_roll":90,"gripper":90,"aux":90}',
+      is_active        INTEGER NOT NULL DEFAULT 1,
+      parcel_count     INTEGER NOT NULL DEFAULT 0,
+      updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS qr_route_profiles (
+      id                      TEXT PRIMARY KEY,
+      code                    TEXT UNIQUE NOT NULL,
+      name                    TEXT NOT NULL,
+      city                    TEXT NOT NULL,
+      target_bin_id           TEXT NOT NULL REFERENCES bins(id),
+      is_disposable_fallback  INTEGER NOT NULL DEFAULT 0,
+      is_active               INTEGER NOT NULL DEFAULT 1,
+      qr_code_payload         TEXT NOT NULL UNIQUE,
+      notes                   TEXT,
+      created_at              TEXT DEFAULT (datetime('now')),
+      updated_at              TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS servo_calibration (
+      id            TEXT PRIMARY KEY,
+      joint_index   INTEGER NOT NULL UNIQUE,
+      joint_name    TEXT NOT NULL,
+      servo_model   TEXT NOT NULL CHECK(servo_model IN ('MG996R', 'MG90S')),
+      pca_channel   INTEGER NOT NULL UNIQUE,
+      min_angle     INTEGER NOT NULL DEFAULT 0,
+      max_angle     INTEGER NOT NULL DEFAULT 180,
+      min_pulse_us  INTEGER NOT NULL DEFAULT 500,
+      max_pulse_us  INTEGER NOT NULL DEFAULT 2500,
+      default_angle INTEGER NOT NULL DEFAULT 90,
+      trim_offset   INTEGER NOT NULL DEFAULT 0,
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS parcels (
+      id                TEXT PRIMARY KEY,
+      order_id          TEXT NOT NULL REFERENCES orders(id),
+      label_version     INTEGER NOT NULL DEFAULT 1,
+      label_payload     TEXT NOT NULL UNIQUE,
+      label_print_count INTEGER NOT NULL DEFAULT 0,
+      first_printed_at  TEXT,
+      last_printed_at   TEXT,
+      status            TEXT NOT NULL DEFAULT 'LABELED',
+      assigned_bin_id   TEXT REFERENCES bins(id),
+      scanned_at        TEXT,
+      at_pick_point_at  TEXT,
+      sorted_at         TEXT,
+      created_at        TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at        TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS scan_events (
+      id            TEXT PRIMARY KEY,
+      parcel_id     TEXT REFERENCES parcels(id),
+      raw_payload   TEXT NOT NULL,
+      source        TEXT NOT NULL,
+      result        TEXT NOT NULL,
+      reason        TEXT,
+      operator_id   TEXT REFERENCES users(id),
+      device_id     TEXT,
+      decode_ms     INTEGER,
+      created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS hardware_commands (
+      id              TEXT PRIMARY KEY,
+      device_id       TEXT NOT NULL,
+      type            TEXT NOT NULL,
+      parcel_id       TEXT REFERENCES parcels(id),
+      bin_id          TEXT REFERENCES bins(id),
+      payload_json    TEXT NOT NULL DEFAULT '{}',
+      status          TEXT NOT NULL DEFAULT 'QUEUED',
+      attempts        INTEGER NOT NULL DEFAULT 0,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      expires_at      TEXT,
+      created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at      TEXT NOT NULL DEFAULT (datetime('now')),
+      completed_at    TEXT,
+      failure_reason  TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS device_heartbeats (
+      device_id    TEXT PRIMARY KEY,
+      last_seen_at TEXT NOT NULL,
+      firmware     TEXT,
+      rssi         INTEGER,
+      state_json   TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS pipeline_faults (
+      id           TEXT PRIMARY KEY,
+      type         TEXT NOT NULL,
+      parcel_id    TEXT,
+      detail       TEXT,
+      created_at   TEXT NOT NULL DEFAULT (datetime('now')),
+      acked_at     TEXT,
+      acked_by     TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS pipeline_state (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL,
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT DEFAULT (datetime('now'))
     );
   `);
 
