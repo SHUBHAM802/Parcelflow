@@ -145,7 +145,9 @@ export const BarcodeScanner: React.FC<BarcodeCannerProps> = ({
       setScanCount(c => c + 1);
 
       if (res.result === 'ACCEPTED') {
-        showToast(`✓ Parcel ${res.parcelId} accepted → ${res.bin?.label || 'BIN'}`, 'success');
+        showToast(`✓ Parcel ${res.parcelId || ''} accepted → ${res.bin?.label || 'BIN'}`, 'success');
+      } else if (res.result === 'DISPOSABLE_FALLBACK') {
+        showToast(`⚠ Fallback: ${res.message}`, 'warning');
       } else if (res.result === 'DUPLICATE') {
         showToast(`Already scanned: ${res.parcelId}`, 'info');
       } else {
@@ -173,6 +175,7 @@ export const BarcodeScanner: React.FC<BarcodeCannerProps> = ({
     UNKNOWN_PARCEL: <XCircle className="w-5 h-5 text-red-500" />,
     WRONG_STATE: <AlertTriangle className="w-5 h-5 text-amber-500" />,
     BUSY: <ZapOff className="w-5 h-5 text-orange-500" />,
+    DISPOSABLE_FALLBACK: <AlertTriangle className="w-5 h-5 text-amber-500" />,
     REJECTED: <XCircle className="w-5 h-5 text-red-500" />,
   }[lastResult.result] || null : null;
 

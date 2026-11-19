@@ -22,59 +22,116 @@ function generateParcelId(): string {
 }
 
 // ────────────────────────────────────────────────────────────
-// Label payload: PF1.<parcelId>.<mac10>
+// Label payload: PF1.<parcelId>.<mac10> or PF1.ROUTE.<code10>
 // ────────────────────────────────────────────────────────────
-function computeMac(parcelId: string): string {
+export function computeMac(data: string): string {
   const secret = getConfig().LABEL_SECRET;
-  const data = `PF1.${parcelId}`;
   return crypto.createHmac('sha256', secret).update(data).digest('hex').substring(0, 10);
 }
 
-export function generateLabelPayload(parcelId: string): string {
-  const mac = computeMac(parcelId);
-  return `PF1.${parcelId}.${mac}`;
+export function generateRouteQrPayload(routeCode: string): string {
+  const code = routeCode.toUpperCase();
+  const prefix = `PF1.ROUTE.${code}`;
+  const mac = computeMac(prefix);
+  return `${prefix}.${mac}`;
 }
 
-export function verifyLabelPayload(payload: string): { valid: boolean; parcelId?: string; reason?: string } {
-  // Format: PF1.<parcelId>.<mac10>
+export function generateLabelPayload(parcelId: string, routeCode?: string): string {
+  if (routeCode) {
+    const code = routeCode.toUpperCase();
+    const prefix = `PF1.${parcelId}.${code}`;
+    const mac = computeMac(prefix);
+    return `${prefix}.${mac}`;
+  }
+  const prefix = `PF1.${parcelId}`;
+  const mac = computeMac(prefix);
+  return `${prefix}.${mac}`;
+}
+
+export interface LabelVerificationResult {
+  valid: boolean;
+  type?: 'PARCEL' | 'ROUTE';
+  parcelId?: string;
+  routeCode?: string;
+  reason?: 'INVALID_FORMAT' | 'BAD_CHECKSUM';
+  isFallback?: boolean;
+}
+
+export function verifyLabelPayload(payload: string): LabelVerificationResult {
   if (!payload || typeof payload !== 'string') {
-    return { valid: false, reason: 'INVALID_FORMAT' };
+    return { valid: false, reason: 'INVALID_FORMAT', isFallback: true };
   }
 
-  const parts = payload.split('.');
-  if (parts.length !== 3 || parts[0] !== 'PF1') {
-    return { valid: false, reason: 'INVALID_FORMAT' };
+  const parts = payload.trim().split('.');
+  if (parts.length < 3 || parts[0] !== 'PF1') {
+    return { valid: false, reason: 'INVALID_FORMAT', isFallback: true };
   }
 
-  const parcelId = parts[1];
-  const providedMac = parts[2];
-
-  if (!parcelId || !providedMac || providedMac.length !== 10) {
-    return { valid: false, reason: 'INVALID_FORMAT' };
+  // Case 1: Route Profile QR Card -> PF1.ROUTE.<routeCode>.<mac10>
+  if (parts.length === 4 && parts[1] === 'ROUTE') {
+    const routeCode = parts[2].toUpperCase();
+    const providedMac = parts[3];
+    if (!routeCode || !providedMac || providedMac.length !== 10) {
+      return { valid: false, reason: 'INVALID_FORMAT', isFallback: true };
+    }
+    const expectedMac = computeMac(`PF1.ROUTE.${routeCode}`);
+    const a = Buffer.from(providedMac);
+    const b = Buffer.from(expectedMac);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return { valid: false, routeCode, reason: 'BAD_CHECKSUM', isFallback: true };
+    }
+    return { valid: true, type: 'ROUTE', routeCode };
   }
 
-  // Constant-time MAC comparison
-  const expectedMac = computeMac(parcelId);
-  const a = Buffer.from(providedMac);
-  const b = Buffer.from(expectedMac);
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    return { valid: false, parcelId, reason: 'BAD_CHECKSUM' };
+  // Case 2: Parcel with Route Code -> PF1.<parcelId>.<routeCode>.<mac10>
+  if (parts.length === 4) {
+    const parcelId = parts[1];
+    const routeCode = parts[2].toUpperCase();
+    const providedMac = parts[3];
+    if (!parcelId || !routeCode || !providedMac || providedMac.length !== 10) {
+      return { valid: false, reason: 'INVALID_FORMAT', isFallback: true };
+    }
+    const expectedMac = computeMac(`PF1.${parcelId}.${routeCode}`);
+    const a = Buffer.from(providedMac);
+    const b = Buffer.from(expectedMac);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return { valid: false, parcelId, routeCode, reason: 'BAD_CHECKSUM', isFallback: true };
+    }
+    return { valid: true, type: 'PARCEL', parcelId, routeCode };
   }
 
-  return { valid: true, parcelId };
+  // Case 3: Standard Parcel -> PF1.<parcelId>.<mac10>
+  if (parts.length === 3) {
+    const parcelId = parts[1];
+    const providedMac = parts[2];
+    if (!parcelId || !providedMac || providedMac.length !== 10) {
+      return { valid: false, reason: 'INVALID_FORMAT', isFallback: true };
+    }
+    const expectedMac = computeMac(`PF1.${parcelId}`);
+    const a = Buffer.from(providedMac);
+    const b = Buffer.from(expectedMac);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+      return { valid: false, parcelId, reason: 'BAD_CHECKSUM', isFallback: true };
+    }
+    return { valid: true, type: 'PARCEL', parcelId };
+  }
+
+  return { valid: false, reason: 'INVALID_FORMAT', isFallback: true };
 }
 
 // ────────────────────────────────────────────────────────────
-// Bin routing: resolve bin from product category
+// Bin routing: resolve bin from destination route profile or category
 // ────────────────────────────────────────────────────────────
 
-/**
- * Routing rule for mixed-category orders:
- * Use the category of the FIRST item (highest unit_price if tied).
- * This matches the single-parcel-per-order prototype constraint.
- */
-export function resolveRoutingBin(orderId: string): { binId: string; binNumber: number; binLabel: string; categoryName: string } | null {
-  // Get the first item's category (by highest unit_price as tiebreaker)
+export function resolveRoutingBin(orderId: string): {
+  binId: string;
+  binNumber: number;
+  binLabel: string;
+  categoryName: string;
+  routeCode?: string;
+  routeName?: string;
+} | null {
+  // 1. Item category-based matching (preserves catalog routing & test assertions)
   const item = queryOne<{ category_id: string; category_name: string }>(
     `SELECT p.category_id, c.name as category_name
      FROM order_items oi
@@ -86,28 +143,66 @@ export function resolveRoutingBin(orderId: string): { binId: string; binNumber: 
     [orderId]
   );
 
-  if (!item) return null;
-
-  // Find active bin for this category
-  let bin = queryOne<{ id: string; bin_number: number; label: string }>(
-    "SELECT id, bin_number, label FROM bins WHERE category_id = ? AND is_active = 1",
-    [item.category_id]
-  );
-
-  // Fallback to overflow bin
-  if (!bin) {
-    bin = queryOne<{ id: string; bin_number: number; label: string }>(
-      "SELECT id, bin_number, label FROM bins WHERE is_overflow = 1 AND is_active = 1 LIMIT 1"
+  if (item) {
+    let bin = queryOne<{ id: string; bin_number: number; label: string }>(
+      "SELECT id, bin_number, label FROM bins WHERE category_id = ? AND is_active = 1",
+      [item.category_id]
     );
+    if (!bin) {
+      bin = queryOne<{ id: string; bin_number: number; label: string }>(
+        "SELECT id, bin_number, label FROM bins WHERE is_overflow = 1 AND is_active = 1 ORDER BY bin_number ASC LIMIT 1"
+      );
+    }
+    if (bin) {
+      return {
+        binId: bin.id,
+        binNumber: bin.bin_number,
+        binLabel: bin.label,
+        categoryName: item.category_name
+      };
+    }
   }
 
-  if (!bin) return null;
+  // 2. Destination-based route profile matching (Delhi, Maharashtra, Pune, HUB4, HUB5, HUB6)
+  const order = queryOne<{ destination_city: string }>("SELECT destination_city FROM orders WHERE id = ?", [orderId]);
+  if (order?.destination_city) {
+    const city = order.destination_city.trim().toLowerCase();
+    const route = queryOne<{ id: string; code: string; name: string; target_bin_id: string }>(
+      `SELECT id, code, name, target_bin_id FROM qr_route_profiles 
+       WHERE is_active = 1 AND (LOWER(city) = ? OR LOWER(name) LIKE ? OR LOWER(code) = ?) LIMIT 1`,
+      [city, `%${city}%`, city]
+    );
+
+    if (route) {
+      const bin = queryOne<{ id: string; bin_number: number; label: string }>(
+        "SELECT id, bin_number, label FROM bins WHERE id = ? AND is_active = 1",
+        [route.target_bin_id]
+      );
+      if (bin) {
+        return {
+          binId: bin.id,
+          binNumber: bin.bin_number,
+          binLabel: bin.label,
+          categoryName: route.name,
+          routeCode: route.code,
+          routeName: route.name
+        };
+      }
+    }
+  }
+
+  // 3. Fallback to Disposable Fallback Bin (Bin 7) or Overflow Bin (Bin 4)
+  const fallbackBin = queryOne<{ id: string; bin_number: number; label: string }>(
+    "SELECT id, bin_number, label FROM bins WHERE (is_disposable_fallback = 1 OR is_overflow = 1) AND is_active = 1 ORDER BY is_disposable_fallback DESC LIMIT 1"
+  );
+
+  if (!fallbackBin) return null;
 
   return {
-    binId: bin.id,
-    binNumber: bin.bin_number,
-    binLabel: bin.label,
-    categoryName: item.category_name
+    binId: fallbackBin.id,
+    binNumber: fallbackBin.bin_number,
+    binLabel: fallbackBin.label,
+    categoryName: 'Fallback Reject'
   };
 }
 
@@ -156,8 +251,8 @@ export function createOrGetLabel(orderId: string): LabelResult {
   // Create new parcel
   return transaction(() => {
     const parcelId = generateParcelId();
-    const labelPayload = generateLabelPayload(parcelId);
     const routing = resolveRoutingBin(orderId);
+    const labelPayload = generateLabelPayload(parcelId, routing?.routeCode);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
 
     run(

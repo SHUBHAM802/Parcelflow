@@ -13,7 +13,10 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "seed": "tsx -e \"import('./src/server/db.js').then(m => m.getDb()).then(() => console.log('Database initialized and seeded.'))\"",
-    "sim:real-check": "node scripts/e2e-happy-path.cjs"
+    "sim:real-check": "node scripts/e2e-happy-path.cjs",
+    "admin:create": "tsx scripts/create-admin.ts",
+    "db:cleanup:dry-run": "tsx scripts/db-cleanup.ts --dry-run",
+    "db:cleanup:apply": "tsx scripts/db-cleanup.ts --apply"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

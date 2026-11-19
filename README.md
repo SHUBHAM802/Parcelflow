@@ -104,17 +104,43 @@ ParcelFlow supports Google Sign-In via Firebase Modular SDK alongside traditiona
 
 ---
 
-## Physical Hardware Pipeline & Operator Sorting
+## Physical Hardware Automation & Real Robotics Cell
 
-ParcelFlow features a physical-first industrial sorting pipeline that supports both real hardware microcontrollers and a synchronous digital twin simulator:
+ParcelFlow integrates physical warehouse automation with dual ESP32 microcontrollers, a physical conveyor belt, and a 7-servo robotic arm:
 
-1. **Shipping Label Studio:** Generates authenticated `PF1.<parcelId>.<mac10>` vector QR & Code 128 labels with batch printing (single 100x100mm, 2x3 A4 sheets) and QR calibration test sheets (20mm–40mm).
-2. **Optical QR Camera Scanning:** The Operator Conveyor page accesses physical webcams via `navigator.mediaDevices.getUserMedia` using `@zxing/browser` with device picker, HUD targeting reticle, decode latency telemetry, and manual override.
-3. **Hardware Microcontroller API (`/api/hardware/*`):** ESP32 conveyor and robotic arm microcontrollers connect via authenticated REST calls using `X-Device-Token` header:
-   - Conveyor controller reports break-beam sensor activations (`IR1` at infeed, `IR2` at pick point) and polls desired conveyor state (`RUN` / `HOLD` / `STOP`).
-   - Robotic arm controller polls queued commands (`GET /api/hardware/commands/next`), acknowledges (`ack`), executes 4-DOF servo positioning (Base, Shoulder, Elbow, Wrist), and confirms placement (`complete`).
-4. **Category-Based Routing:** 4 data-driven category bins (Electronics, Mechanical & Tools, Healthcare & Safety, Apparel & General) with editable servo presets configured in the Admin portal.
-5. **Watchdog & Interlock Safety:** E-Stop hardware and software triggers, heartbeat liveness monitoring (5s timeout), and automatic conveyor halt on break-beam anomalies.
+1. **Hardware Controllers & Firmware (`firmware/`):**
+   - **ESP32 #1 Conveyor Controller (`firmware/ConveyorESP32/`):** Controls L298N motor driver (ENA=25, IN1=32, IN2=33) with 12V DC motor and LM2596 buck converter (5V logic). Reads IR1 (GPIO 27) at camera inspection zone and IR2 (GPIO 26) at pick point. Features **instant local hardware interrupt halt** on IR2 without network latency.
+   - **ESP32 #2 7-Servo Robotic Arm (`firmware/RoboticArmESP32/`):** Interfaces with PCA9685 16-channel 12-bit PWM driver over I2C (SDA=21, SCL=22) at 50Hz. Drives 4x MG996R high-torque servos (Base, Shoulder, Elbow, Wrist Pitch) and 3x MG90S micro servos (Wrist Roll, Gripper, Aux). Employs multi-waypoint cosine-smoothed trajectory kinematics and separate high-current servo power supply.
+
+2. **6 Destination Route Profiles + Disposable Fallback Reject:**
+   - **Delhi Capital Hub (`DEL`):** Target Bin 1 (`bin-1`)
+   - **Maharashtra Regional Gateway (`MH`):** Target Bin 2 (`bin-2`)
+   - **Pune Metro Express (`PN`):** Target Bin 3 (`bin-3`)
+   - **North / Central Express (`HUB4`):** Target Bin 4 (`bin-4`)
+   - **South Express Gateway (`HUB5`):** Target Bin 5 (`bin-5`)
+   - **East Coast Terminal (`HUB6`):** Target Bin 6 (`bin-6`)
+   - **Disposable Fallback Reject (`FALLBACK`):** Target Bin 7 (`bin-7`) — automatic safety catch-all for damaged, foreign, or unregistered barcodes.
+
+3. **Cryptographic QR Demonstration Cards:**
+   - Pre-printed route demonstration cards (`PF1.ROUTE.<CODE>.<MAC10>`) and parcel labels with HMAC-SHA256 verification.
+   - Printable directly from the Admin Portal > Destination Route Profiles screen.
+
+4. **USB Optical QR Scanner:**
+   - Operator Conveyor page utilizes `@zxing/browser` with camera selection for physical USB webcams, decode latency tracking, and single-parcel pipeline gating.
+
+5. **CLI Administration & Database Cleanup:**
+   ```bash
+   # Bootstrap first system administrator
+   npm run admin:create -- --email=admin@parcelflow.com --password=YourPassword
+
+   # Preview cleanup in dry-run mode
+   npm run db:cleanup:dry-run
+
+   # Apply database cleanup for empty-state physical demonstration
+   npm run db:cleanup:apply
+   ```
+
+For detailed electrical schematics, power separation rules, and firmware flashing steps, see [docs/REAL_HARDWARE_SETUP.md](docs/REAL_HARDWARE_SETUP.md).
 
 ---
 

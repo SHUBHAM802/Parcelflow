@@ -307,6 +307,88 @@ function runMigrations(db: Database) {
     db.run("INSERT OR IGNORE INTO pipeline_state (key, value, updated_at) VALUES ('estop_active', 'false', ?)", [now]);
     recordMigration(db, '008_pipeline_state');
   }
+
+  // Migration 009: 7-joint servo arm, 6 QR destination route profiles + disposable fallback bin
+  if (!hasMigration(db, '009_seven_joint_and_route_profiles')) {
+    try { db.run("ALTER TABLE bins ADD COLUMN is_disposable_fallback INTEGER NOT NULL DEFAULT 0;"); } catch {}
+    
+    db.run(`
+      CREATE TABLE IF NOT EXISTS qr_route_profiles (
+        id                      TEXT PRIMARY KEY,
+        code                    TEXT UNIQUE NOT NULL,
+        name                    TEXT NOT NULL,
+        city                    TEXT NOT NULL,
+        target_bin_id           TEXT NOT NULL REFERENCES bins(id),
+        is_disposable_fallback  INTEGER NOT NULL DEFAULT 0,
+        is_active               INTEGER NOT NULL DEFAULT 1,
+        qr_code_payload         TEXT NOT NULL UNIQUE,
+        notes                   TEXT,
+        created_at              TEXT DEFAULT (datetime('now')),
+        updated_at              TEXT DEFAULT (datetime('now'))
+      );
+      CREATE INDEX IF NOT EXISTS idx_route_profiles_code ON qr_route_profiles(code);
+      CREATE INDEX IF NOT EXISTS idx_route_profiles_city ON qr_route_profiles(city);
+
+      CREATE TABLE IF NOT EXISTS servo_calibration (
+        id            TEXT PRIMARY KEY,
+        joint_index   INTEGER NOT NULL UNIQUE,
+        joint_name    TEXT NOT NULL,
+        servo_model   TEXT NOT NULL CHECK(servo_model IN ('MG996R', 'MG90S')),
+        pca_channel   INTEGER NOT NULL UNIQUE,
+        min_angle     INTEGER NOT NULL DEFAULT 0,
+        max_angle     INTEGER NOT NULL DEFAULT 180,
+        min_pulse_us  INTEGER NOT NULL DEFAULT 500,
+        max_pulse_us  INTEGER NOT NULL DEFAULT 2500,
+        default_angle INTEGER NOT NULL DEFAULT 90,
+        trim_offset   INTEGER NOT NULL DEFAULT 0,
+        updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+    `);
+
+    // Ensure bin-4 is overflow and bin-7 is fallback
+    db.run("UPDATE bins SET is_overflow = 1 WHERE bin_number = 4;");
+
+    // Insert 7 physical bins (6 destinations + 1 disposable fallback)
+    db.run(`
+      INSERT OR REPLACE INTO bins (id, bin_number, label, category_id, is_overflow, is_disposable_fallback, servo_preset_json, is_active, parcel_count, updated_at)
+      VALUES
+        ('bin-1', 1, 'DELHI HUB (BIN 1)', 'cat-electronics', 0, 0, '{"base":35,"shoulder":80,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-2', 2, 'MAHARASHTRA HUB (BIN 2)', 'cat-fashion', 0, 0, '{"base":65,"shoulder":85,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-3', 3, 'PUNE METRO (BIN 3)', 'cat-books', 0, 0, '{"base":90,"shoulder":85,"elbow":115,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-4', 4, 'NORTH EXPRESS (BIN 4)', NULL, 1, 0, '{"base":115,"shoulder":80,"elbow":110,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-5', 5, 'SOUTH EXPRESS (BIN 5)', NULL, 0, 0, '{"base":140,"shoulder":75,"elbow":105,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-6', 6, 'EAST EXPRESS (BIN 6)', NULL, 0, 0, '{"base":160,"shoulder":75,"elbow":100,"wrist_pitch":85,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now')),
+        ('bin-7', 7, 'DISPOSABLE / REJECT (BIN 7)', NULL, 1, 1, '{"base":180,"shoulder":70,"elbow":95,"wrist_pitch":80,"wrist_roll":90,"gripper":110,"aux":90}', 1, 0, datetime('now'));
+    `);
+
+    // Insert 6 destination route profiles + 1 disposable fallback profile
+    db.run(`
+      INSERT OR REPLACE INTO qr_route_profiles (id, code, name, city, target_bin_id, is_disposable_fallback, is_active, qr_code_payload, notes, updated_at)
+      VALUES
+        ('prof-delhi', 'DEL', 'Delhi Capital Hub', 'Delhi', 'bin-1', 0, 1, 'PF1.ROUTE.DEL.d3l9a8b7c6', 'Priority sorting for Northern NCR hub', datetime('now')),
+        ('prof-maharashtra', 'MH', 'Maharashtra Regional Gateway', 'Mumbai', 'bin-2', 0, 1, 'PF1.ROUTE.MH.m4h5b6c7d8', 'State distribution for West zone & Mumbai', datetime('now')),
+        ('prof-pune', 'PN', 'Pune Metro Express', 'Pune', 'bin-3', 0, 1, 'PF1.ROUTE.PN.p9n8e7d6c5', 'Local automated fulfillment for Pune & PCMC', datetime('now')),
+        ('prof-hub4', 'HUB4', 'Bengaluru Tech Corridor', 'Bengaluru', 'bin-4', 0, 1, 'PF1.ROUTE.HUB4.b4e5n6g7h8', 'South-Central express destination (configurable)', datetime('now')),
+        ('prof-hub5', 'HUB5', 'Hyderabad Deccan Gateway', 'Hyderabad', 'bin-5', 0, 1, 'PF1.ROUTE.HUB5.h5y6d7e8r9', 'South regional gateway hub (configurable)', datetime('now')),
+        ('prof-hub6', 'HUB6', 'Kolkata East Terminal', 'Kolkata', 'bin-6', 0, 1, 'PF1.ROUTE.HUB6.k6o7l8k9a0', 'Eastern logistics arterial link (configurable)', datetime('now')),
+        ('prof-fallback', 'FALLBACK', 'Disposable / Unreadable Reject', 'Unknown', 'bin-7', 1, 1, 'PF1.ROUTE.FALLBACK.f0a1l2l3b4', 'Safety catch-all for damaged/unregistered/foreign barcodes', datetime('now'));
+    `);
+
+    // Insert 7 servo calibration channels (PCA9685 CH0-CH6)
+    db.run(`
+      INSERT OR REPLACE INTO servo_calibration (id, joint_index, joint_name, servo_model, pca_channel, min_angle, max_angle, min_pulse_us, max_pulse_us, default_angle, trim_offset, updated_at)
+      VALUES
+        ('calib-0', 0, 'Base (Waist Rotation)', 'MG996R', 0, 0, 180, 500, 2500, 90, 0, datetime('now')),
+        ('calib-1', 1, 'Shoulder (Arm Pitch)', 'MG996R', 1, 15, 165, 500, 2500, 85, 0, datetime('now')),
+        ('calib-2', 2, 'Elbow (Forearm Lift)', 'MG996R', 2, 15, 165, 500, 2500, 105, 0, datetime('now')),
+        ('calib-3', 3, 'Wrist Pitch (End Effector Tilt)', 'MG996R', 3, 0, 180, 500, 2500, 85, 0, datetime('now')),
+        ('calib-4', 4, 'Wrist Roll (End Effector Swivel)', 'MG90S', 4, 0, 180, 500, 2500, 90, 0, datetime('now')),
+        ('calib-5', 5, 'Gripper (Claw Clamp)', 'MG90S', 5, 30, 125, 600, 2400, 50, 0, datetime('now')),
+        ('calib-6', 6, 'Auxiliary (Stabilizer / Cam)', 'MG90S', 6, 0, 180, 500, 2500, 90, 0, datetime('now'));
+    `);
+
+    recordMigration(db, '009_seven_joint_and_route_profiles');
+  }
 }
 
 function migrateUserPasswords(db: Database) {
@@ -357,6 +439,7 @@ export async function getDb(): Promise<Database> {
       dbInstance.run("UPDATE users SET email = 'admin@parcelflow.com' WHERE email = 'admin@parcelflow.demo'");
 
       runMigrations(dbInstance);
+      dbInstance.run("UPDATE bins SET is_overflow = 1 WHERE bin_number = 4;");
       applyPragmasAndIndexes(dbInstance);
       migrateUserPasswords(dbInstance);
       flushSave();
@@ -649,10 +732,40 @@ async function initSchemaAndSeed(db: Database) {
       label            TEXT NOT NULL,
       category_id      TEXT REFERENCES categories(id),
       is_overflow      INTEGER NOT NULL DEFAULT 0,
-      servo_preset_json TEXT NOT NULL DEFAULT '{"base":90,"shoulder":90,"elbow":90,"wrist":90}',
+      is_disposable_fallback INTEGER NOT NULL DEFAULT 0,
+      servo_preset_json TEXT NOT NULL DEFAULT '{"base":90,"shoulder":90,"elbow":90,"wrist_pitch":90,"wrist_roll":90,"gripper":90,"aux":90}',
       is_active        INTEGER NOT NULL DEFAULT 1,
       parcel_count     INTEGER NOT NULL DEFAULT 0,
       updated_at       TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS qr_route_profiles (
+      id                      TEXT PRIMARY KEY,
+      code                    TEXT UNIQUE NOT NULL,
+      name                    TEXT NOT NULL,
+      city                    TEXT NOT NULL,
+      target_bin_id           TEXT NOT NULL REFERENCES bins(id),
+      is_disposable_fallback  INTEGER NOT NULL DEFAULT 0,
+      is_active               INTEGER NOT NULL DEFAULT 1,
+      qr_code_payload         TEXT NOT NULL UNIQUE,
+      notes                   TEXT,
+      created_at              TEXT DEFAULT (datetime('now')),
+      updated_at              TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS servo_calibration (
+      id            TEXT PRIMARY KEY,
+      joint_index   INTEGER NOT NULL UNIQUE,
+      joint_name    TEXT NOT NULL,
+      servo_model   TEXT NOT NULL CHECK(servo_model IN ('MG996R', 'MG90S')),
+      pca_channel   INTEGER NOT NULL UNIQUE,
+      min_angle     INTEGER NOT NULL DEFAULT 0,
+      max_angle     INTEGER NOT NULL DEFAULT 180,
+      min_pulse_us  INTEGER NOT NULL DEFAULT 500,
+      max_pulse_us  INTEGER NOT NULL DEFAULT 2500,
+      default_angle INTEGER NOT NULL DEFAULT 90,
+      trim_offset   INTEGER NOT NULL DEFAULT 0,
+      updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
     );
 
     CREATE TABLE IF NOT EXISTS parcels (

@@ -33,7 +33,7 @@ import {
   resetEmergencyStop,
   getPipelineSnapshot
 } from './services/hardwareService';
-import { createOrGetLabel, recordLabelPrinted } from './services/labelService';
+import { createOrGetLabel, recordLabelPrinted, generateRouteQrPayload } from './services/labelService';
 import { processScan } from './services/scanService';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Server as SocketIOServer } from 'socket.io';
@@ -1814,7 +1814,7 @@ export function createApiRouter(io: SocketIOServer) {
     return res.json(result);
   });
 
-  router.get(['/hardware/conveyor/desired', '/api/hardware/conveyor/desired'], requireDeviceToken, (_req: Request, res: Response) => {
+  router.get(['/hardware/conveyor/desired', '/api/hardware/conveyor/desired', '/hardware/conveyor/state', '/api/hardware/conveyor/state'], requireDeviceToken, (_req: Request, res: Response) => {
     const state = getDesiredConveyorState();
     return res.json(state);
   });
@@ -1846,6 +1846,132 @@ export function createApiRouter(io: SocketIOServer) {
     const { reason } = req.body;
     const result = failCommand(id, reason || 'Unknown device fault', io);
     return res.json(result);
+  });
+
+  // ==========================================
+  // ROUTE PROFILES (Admin Destination Management)
+  // ==========================================
+  router.get(['/admin/route-profiles', '/api/admin/route-profiles'], requireStaff, (_req: Request, res: Response) => {
+    const profiles = query(`
+      SELECT rp.*, b.bin_number, b.label as target_bin_label, b.is_disposable_fallback as bin_disposable
+      FROM qr_route_profiles rp
+      JOIN bins b ON rp.target_bin_id = b.id
+      ORDER BY rp.is_disposable_fallback ASC, b.bin_number ASC
+    `);
+    return res.json(profiles);
+  });
+
+  router.put(['/admin/route-profiles/:id', '/api/admin/route-profiles/:id'], requireAdmin, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, city, target_bin_id, is_active, notes } = req.body;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const existing = queryOne("SELECT id FROM qr_route_profiles WHERE id = ?", [id]);
+    if (!existing) return res.status(404).json({ error: 'Route profile not found' });
+
+    if (name !== undefined) run("UPDATE qr_route_profiles SET name = ?, updated_at = ? WHERE id = ?", [name, now, id]);
+    if (city !== undefined) run("UPDATE qr_route_profiles SET city = ?, updated_at = ? WHERE id = ?", [city, now, id]);
+    if (target_bin_id !== undefined) run("UPDATE qr_route_profiles SET target_bin_id = ?, updated_at = ? WHERE id = ?", [target_bin_id, now, id]);
+    if (is_active !== undefined) run("UPDATE qr_route_profiles SET is_active = ?, updated_at = ? WHERE id = ?", [is_active ? 1 : 0, now, id]);
+    if (notes !== undefined) run("UPDATE qr_route_profiles SET notes = ?, updated_at = ? WHERE id = ?", [notes, now, id]);
+
+    return res.json({ success: true });
+  });
+
+  router.post(['/admin/route-profiles', '/api/admin/route-profiles'], requireAdmin, (req: Request, res: Response) => {
+    const { code, name, city, target_bin_id, notes } = req.body;
+    if (!code || !name || !city || !target_bin_id) {
+      return res.status(400).json({ error: 'code, name, city, and target_bin_id are required' });
+    }
+
+    const cleanCode = code.trim().toUpperCase();
+    const existing = queryOne("SELECT id FROM qr_route_profiles WHERE UPPER(code) = ?", [cleanCode]);
+    if (existing) {
+      return res.status(409).json({ error: `Route profile with code ${cleanCode} already exists` });
+    }
+
+    const id = `prof-${cleanCode.toLowerCase()}-${Date.now().toString().slice(-4)}`;
+    const qrPayload = generateRouteQrPayload(cleanCode);
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    run(
+      `INSERT INTO qr_route_profiles (id, code, name, city, target_bin_id, is_disposable_fallback, is_active, qr_code_payload, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?)`,
+      [id, cleanCode, name, city, target_bin_id, qrPayload, notes || null, now, now]
+    );
+
+    return res.status(201).json({ success: true, id, code: cleanCode, qrPayload });
+  });
+
+  router.get(['/admin/route-profiles/:id/qr', '/api/admin/route-profiles/:id/qr'], requireStaff, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const profile = queryOne<{ code: string; name: string; qr_code_payload: string }>(
+      "SELECT code, name, qr_code_payload FROM qr_route_profiles WHERE id = ? OR UPPER(code) = UPPER(?)",
+      [id, id]
+    );
+    if (!profile) return res.status(404).json({ error: 'Route profile not found' });
+    return res.json({
+      code: profile.code,
+      name: profile.name,
+      payload: profile.qr_code_payload
+    });
+  });
+
+  // ==========================================
+  // SERVO CALIBRATION (7-Joint PCA9685 Arm)
+  // ==========================================
+  router.get(['/admin/servo-calibration', '/api/admin/servo-calibration'], requireStaff, (_req: Request, res: Response) => {
+    const calibrations = query("SELECT * FROM servo_calibration ORDER BY joint_index ASC");
+    return res.json(calibrations);
+  });
+
+  router.put(['/admin/servo-calibration/:id', '/api/admin/servo-calibration/:id'], requireAdmin, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { min_angle, max_angle, min_pulse_us, max_pulse_us, default_angle, trim_offset } = req.body;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const existing = queryOne<{ id: string }>("SELECT id FROM servo_calibration WHERE id = ? OR joint_index = ?", [id, id]);
+    if (!existing) return res.status(404).json({ error: 'Joint calibration record not found' });
+
+    if (min_angle !== undefined) run("UPDATE servo_calibration SET min_angle = ?, updated_at = ? WHERE id = ?", [min_angle, now, existing.id]);
+    if (max_angle !== undefined) run("UPDATE servo_calibration SET max_angle = ?, updated_at = ? WHERE id = ?", [max_angle, now, existing.id]);
+    if (min_pulse_us !== undefined) run("UPDATE servo_calibration SET min_pulse_us = ?, updated_at = ? WHERE id = ?", [min_pulse_us, now, existing.id]);
+    if (max_pulse_us !== undefined) run("UPDATE servo_calibration SET max_pulse_us = ?, updated_at = ? WHERE id = ?", [max_pulse_us, now, existing.id]);
+    if (default_angle !== undefined) run("UPDATE servo_calibration SET default_angle = ?, updated_at = ? WHERE id = ?", [default_angle, now, existing.id]);
+    if (trim_offset !== undefined) run("UPDATE servo_calibration SET trim_offset = ?, updated_at = ? WHERE id = ?", [trim_offset, now, existing.id]);
+
+    return res.json({ success: true });
+  });
+
+  router.post(['/admin/servo-calibration/test-joint', '/api/admin/servo-calibration/test-joint'], requireAdmin, (req: Request, res: Response) => {
+    const { jointIndex, angle } = req.body;
+    if (jointIndex === undefined || angle === undefined) {
+      return res.status(400).json({ error: 'jointIndex and angle are required' });
+    }
+
+    const joint = queryOne<{ joint_name: string; pca_channel: number; min_angle: number; max_angle: number }>(
+      "SELECT * FROM servo_calibration WHERE joint_index = ?", [jointIndex]
+    );
+    if (!joint) return res.status(404).json({ error: `Joint index ${jointIndex} not found` });
+
+    const targetAngle = Math.max(joint.min_angle, Math.min(joint.max_angle, Number(angle)));
+    const cmdId = `test-joint-${jointIndex}-${Date.now()}`;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const payloadJson = JSON.stringify({
+      jointIndex,
+      jointName: joint.joint_name,
+      pcaChannel: joint.pca_channel,
+      targetAngle
+    });
+
+    run(
+      `INSERT INTO hardware_commands (id, device_id, type, payload_json, status, idempotency_key, created_at, updated_at)
+       VALUES (?, 'arm-esp32', 'TEST_JOINT', ?, 'RELEASED', ?, ?, ?)`,
+      [cmdId, payloadJson, `joint-cmd-${cmdId}`, now, now]
+    );
+
+    return res.json({ success: true, commandId: cmdId, jointIndex, pcaChannel: joint.pca_channel, targetAngle });
   });
 
   // ==========================================
