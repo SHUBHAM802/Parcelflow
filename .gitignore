@@ -14,6 +14,8 @@ coverage/
 *.sqlite
 *.sqlite3
 parcelflow.sqlite
+*.bak
+*.tmp
 
 # Environment configuration
 .env
@@ -38,3 +40,18 @@ Thumbs.db
 
 # Test & inspect artifacts
 inspect_output.txt
+inspect.cjs
+inspect-db.cjs
+
+# Agent tooling output
+.agents/
+graphify-out/
+.graphify_cache/
+.graphifyignore
+
+# Database backups
+backups/
+
+# Firebase service accounts (NEVER commit)
+*-firebase-adminsdk-*.json
+service-account*.json

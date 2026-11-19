@@ -1,42 +1,74 @@
 import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { queryOne, run } from './db';
+import { getConfig } from './config';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'parcelflow-industrial-jwt-secret-2026';
+// ────────────────────────────────────────────────────────────
+// Password Hashing — PBKDF2-SHA512
+// ────────────────────────────────────────────────────────────
+const CURRENT_ITERATIONS = 210_000;
+const KEY_LENGTH = 64;
+const DIGEST = 'sha512';
 
-// ----------------------------------------------------
-// Password Hashing (PBKDF2 with random salt)
-// ----------------------------------------------------
+/**
+ * Hash a password. Format: `iterations:salt:hash` (all hex).
+ */
 export function hashPassword(password: string): string {
   const salt = crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return `${salt}:${hash}`;
+  const hash = crypto.pbkdf2Sync(password, salt, CURRENT_ITERATIONS, KEY_LENGTH, DIGEST).toString('hex');
+  return `${CURRENT_ITERATIONS}:${salt}:${hash}`;
 }
 
-export function verifyPassword(password: string, storedHash: string): boolean {
-  if (!storedHash) return false;
-
-  // Support legacy plain demo password during transition
-  if (storedHash === password || (storedHash === 'demo123' && password === 'demo123')) {
-    return true;
-  }
+/**
+ * Verify a password against a stored hash.
+ * Returns `{ valid, needsRehash }`.
+ * Supports legacy `salt:hash` format (10,000 iterations) for migration.
+ */
+export function verifyPassword(password: string, storedHash: string): { valid: boolean; needsRehash: boolean } {
+  if (!storedHash || !password) return { valid: false, needsRehash: false };
 
   const parts = storedHash.split(':');
-  if (parts.length !== 2) {
-    // If not in salt:hash format, fallback check
-    return storedHash === password;
+
+  let iterations: number;
+  let salt: string;
+  let originalHash: string;
+
+  if (parts.length === 3) {
+    // New format: iterations:salt:hash
+    iterations = parseInt(parts[0], 10);
+    salt = parts[1];
+    originalHash = parts[2];
+  } else if (parts.length === 2) {
+    // Legacy format: salt:hash (10,000 iterations)
+    iterations = 10_000;
+    salt = parts[0];
+    originalHash = parts[1];
+  } else {
+    // Unknown format — reject
+    return { valid: false, needsRehash: false };
   }
 
-  const [salt, originalHash] = parts;
-  const computedHash = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-  return crypto.timingSafeEqual(Buffer.from(computedHash, 'hex'), Buffer.from(originalHash, 'hex'));
+  if (isNaN(iterations) || iterations < 1) return { valid: false, needsRehash: false };
+
+  const computedHash = crypto.pbkdf2Sync(password, salt, iterations, KEY_LENGTH, DIGEST).toString('hex');
+
+  // Constant-time comparison
+  const a = Buffer.from(computedHash, 'hex');
+  const b = Buffer.from(originalHash, 'hex');
+  if (a.length !== b.length) return { valid: false, needsRehash: false };
+
+  const valid = crypto.timingSafeEqual(a, b);
+  const needsRehash = valid && iterations < CURRENT_ITERATIONS;
+
+  return { valid, needsRehash };
 }
 
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────────
 // JWT Token Signing & Verification (HMAC-SHA256)
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────────
 export interface TokenPayload {
-  id: string;
+  sub: string;   // user id
+  id: string;    // alias for sub (backwards compat)
   email: string;
   role: 'customer' | 'operator' | 'admin';
   name: string;
@@ -61,9 +93,11 @@ function base64UrlDecode(str: string): string {
 }
 
 export function generateToken(user: { id: string; email: string; role: 'customer' | 'operator' | 'admin'; name: string }): string {
+  const secret = getConfig().JWT_SECRET;
   const header = { alg: 'HS256', typ: 'JWT' };
   const now = Math.floor(Date.now() / 1000);
   const payload: TokenPayload = {
+    sub: user.id,
     id: user.id,
     email: user.email,
     role: user.role,
@@ -75,7 +109,7 @@ export function generateToken(user: { id: string; email: string; role: 'customer
   const headerB64 = base64UrlEncode(JSON.stringify(header));
   const payloadB64 = base64UrlEncode(JSON.stringify(payload));
   const signature = crypto
-    .createHmac('sha256', JWT_SECRET)
+    .createHmac('sha256', secret)
     .update(`${headerB64}.${payloadB64}`)
     .digest('base64')
     .replace(/=/g, '')
@@ -89,47 +123,47 @@ export function verifyToken(token: string): TokenPayload | null {
   try {
     if (!token) return null;
 
-    // Also support legacy token format: pf-jwt-<userId>-<timestamp>
-    if (token.startsWith('pf-jwt-')) {
-      const parts = token.split('-');
-      // format: pf-jwt-<userId>-<timestamp>
-      const userId = parts.slice(2, parts.length - 1).join('-');
-      if (userId) {
-        const user = queryOne<{ id: string; email: string; role: any; name: string }>(
-          "SELECT id, email, role, name FROM users WHERE id = ?", [userId]
-        );
-        if (user) {
-          return {
-            id: user.id,
-            email: user.email,
-            role: user.role,
-            name: user.name,
-            iat: Math.floor(Date.now() / 1000),
-            exp: Math.floor(Date.now() / 1000) + 86400
-          };
-        }
-      }
-    }
-
     const parts = token.split('.');
     if (parts.length !== 3) return null;
 
     const [headerB64, payloadB64, signature] = parts;
+
+    // Verify header algorithm
+    try {
+      const header = JSON.parse(base64UrlDecode(headerB64));
+      if (header.alg !== 'HS256') return null;
+    } catch {
+      return null;
+    }
+
+    const secret = getConfig().JWT_SECRET;
     const expectedSignature = crypto
-      .createHmac('sha256', JWT_SECRET)
+      .createHmac('sha256', secret)
       .update(`${headerB64}.${payloadB64}`)
       .digest('base64')
       .replace(/=/g, '')
       .replace(/\+/g, '-')
       .replace(/\//g, '_');
 
-    if (signature !== expectedSignature) return null;
+    // Constant-time signature comparison
+    const sigBuf = Buffer.from(signature);
+    const expectedBuf = Buffer.from(expectedSignature);
+    if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+      return null;
+    }
 
     const payload: TokenPayload = JSON.parse(base64UrlDecode(payloadB64));
     const now = Math.floor(Date.now() / 1000);
-    if (payload.exp && payload.exp < now) {
-      return null; // Expired
-    }
+
+    // Validate required claims
+    if (!payload.sub && !payload.id) return null;
+    if (!payload.exp || payload.exp < now) return null;
+    if (!payload.iat) return null;
+    if (!payload.role) return null;
+
+    // Normalize: ensure both sub and id are set
+    if (!payload.sub) payload.sub = payload.id;
+    if (!payload.id) payload.id = payload.sub;
 
     return payload;
   } catch {
@@ -137,9 +171,9 @@ export function verifyToken(token: string): TokenPayload | null {
   }
 }
 
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────────
 // Authentication & Role Middlewares
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────────
 export interface AuthenticatedRequest extends Request {
   user?: {
     id: string;
@@ -156,17 +190,6 @@ export function extractUserFromRequest(req: Request): { id: string; email: strin
     const verified = verifyToken(token);
     if (verified) {
       return { id: verified.id, email: verified.email, role: verified.role, name: verified.name };
-    }
-  }
-
-  // Fallback to x-user-id header
-  const userId = req.headers['x-user-id'] as string;
-  if (userId) {
-    const user = queryOne<{ id: string; email: string; role: any; name: string }>(
-      "SELECT id, email, role, name FROM users WHERE id = ?", [userId]
-    );
-    if (user) {
-      return { id: user.id, email: user.email, role: user.role, name: user.name };
     }
   }
 
@@ -197,9 +220,46 @@ export function requireRole(allowedRoles: ('customer' | 'operator' | 'admin') | 
   };
 }
 
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────────
+// Device Token Middleware (for ESP32 hardware routes)
+// ────────────────────────────────────────────────────────────
+export function requireDeviceToken(req: Request, res: Response, next: NextFunction) {
+  const cfg = getConfig();
+  if (!cfg.DEVICE_TOKEN) {
+    return res.status(503).json({ error: 'Hardware API not configured' });
+  }
+
+  const token = req.headers['x-device-token'];
+  if (!token || typeof token !== 'string') {
+    return res.status(401).json({ error: 'Device token required' });
+  }
+
+  const tokenBuf = Buffer.from(token);
+  const primaryBuf = Buffer.from(cfg.DEVICE_TOKEN);
+
+  let match = false;
+  if (tokenBuf.length === primaryBuf.length) {
+    match = crypto.timingSafeEqual(tokenBuf, primaryBuf);
+  }
+
+  // Check rotation slot
+  if (!match && cfg.DEVICE_TOKEN_NEXT) {
+    const nextBuf = Buffer.from(cfg.DEVICE_TOKEN_NEXT);
+    if (tokenBuf.length === nextBuf.length) {
+      match = crypto.timingSafeEqual(tokenBuf, nextBuf);
+    }
+  }
+
+  if (!match) {
+    return res.status(401).json({ error: 'Invalid device token' });
+  }
+
+  next();
+}
+
+// ────────────────────────────────────────────────────────────
 // Login Rate Limiter (Sliding Window in-memory)
-// ----------------------------------------------------
+// ────────────────────────────────────────────────────────────
 interface RateLimitRecord {
   timestamps: number[];
 }
@@ -225,6 +285,50 @@ export function loginRateLimiter(maxAttempts = 10, windowMs = 60 * 1000) {
 
     record.timestamps.push(now);
     loginAttempts.set(ip, record);
+    next();
+  };
+}
+
+// ────────────────────────────────────────────────────────────
+// Scan Rate Limiter (per-user, for /api/operator/scan)
+// ────────────────────────────────────────────────────────────
+const scanAttempts = new Map<string, RateLimitRecord>();
+
+export function scanRateLimiter(maxAttempts = 30, windowMs = 10_000) {
+  return (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+    const userId = req.user?.id || req.ip || 'unknown';
+    const now = Date.now();
+    const record = scanAttempts.get(userId) || { timestamps: [] };
+    record.timestamps = record.timestamps.filter(t => now - t < windowMs);
+
+    if (record.timestamps.length >= maxAttempts) {
+      return res.status(429).json({ error: 'Scan rate limit exceeded. Slow down.' });
+    }
+
+    record.timestamps.push(now);
+    scanAttempts.set(userId, record);
+    next();
+  };
+}
+
+// ────────────────────────────────────────────────────────────
+// Hardware Rate Limiter (per-device)
+// ────────────────────────────────────────────────────────────
+const hardwareAttempts = new Map<string, RateLimitRecord>();
+
+export function hardwareRateLimiter(maxAttempts = 120, windowMs = 10_000) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const deviceId = (req.body?.deviceId as string) || req.query.deviceId as string || 'unknown';
+    const now = Date.now();
+    const record = hardwareAttempts.get(deviceId) || { timestamps: [] };
+    record.timestamps = record.timestamps.filter(t => now - t < windowMs);
+
+    if (record.timestamps.length >= maxAttempts) {
+      return res.status(429).json({ error: 'Hardware rate limit exceeded' });
+    }
+
+    record.timestamps.push(now);
+    hardwareAttempts.set(deviceId, record);
     next();
   };
 }
