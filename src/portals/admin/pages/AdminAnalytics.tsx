@@ -92,25 +92,25 @@ export const AdminAnalytics: React.FC = () => {
         <KPICard
           label="Total Revenue"
           value={formatINR(overview.totalRevenue)}
-          subtext="+14.2% from previous cycle"
+          subtext="Net confirmed sales"
           icon={<DollarSign className="w-4 h-4 text-emerald-600" />}
         />
         <KPICard
           label="Total Orders"
           value={overview.totalOrders}
-          subtext="E-commerce storefront"
+          subtext={data?.kpis?.pendingPayments ? `${data.kpis.pendingPayments} pending payments` : 'Storefront orders'}
           icon={<ShoppingCart className="w-4 h-4 text-blue-600" />}
         />
         <KPICard
           label="Conveyor Sort Rate"
           value={`${overview.sortRatePerHour} / hr`}
-          subtext="Avg sort: 1,420 ms"
+          subtext={data?.warehouseMetrics?.avgSortTimeMs ? `Avg sort: ${data.warehouseMetrics.avgSortTimeMs} ms` : 'Optical sorting'}
           icon={<Zap className="w-4 h-4 text-amber-600" />}
         />
         <KPICard
           label="Low Stock Alerts"
           value={overview.lowStockCount}
-          subtext="Items below 5 units"
+          subtext="Inventory threshold triggers"
           icon={<AlertTriangle className="w-4 h-4 text-red-600" />}
         />
       </div>
