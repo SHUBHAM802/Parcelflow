@@ -17,17 +17,40 @@ import { useToast } from '../../shared/store/toastContext';
 export const CustomerPortal: React.FC = () => {
   const { showToast } = useToast();
 
-  const [activePage, setActivePage] = useState<string>('home');
+  const getPageFromPath = (): string => {
+    const path = window.location.pathname.toLowerCase();
+    const sub = path.replace(/^\/customer\/?/, '').split('/')[0];
+    const validPages = ['home', 'catalog', 'product', 'checkout', 'orders', 'tracking', 'invoice', 'wishlist', 'profile'];
+    if (sub === 'store') return 'home';
+    if (validPages.includes(sub)) return sub;
+    return 'home';
+  };
+
+  const [activePage, setActivePage] = useState<string>(getPageFromPath);
   const [selectedProductId, setSelectedProductId] = useState<string>('');
   const [selectedOrderId, setSelectedOrderId] = useState<string>('');
   const [initialCatalogCategory, setInitialCatalogCategory] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Sync with browser URL navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      setActivePage(getPageFromPath());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
   const [cartItems, setCartItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState<boolean>(false);
   const [wishlistIds, setWishlistIds] = useState<Set<string>>(() => {
-    const saved = localStorage.getItem('parcelflow_wishlist');
-    return saved ? new Set(JSON.parse(saved)) : new Set(['prod-1', 'prod-3']);
+    try {
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        const saved = localStorage.getItem('parcelflow_wishlist');
+        return saved ? new Set(JSON.parse(saved)) : new Set(['prod-1', 'prod-3']);
+      }
+    } catch {}
+    return new Set(['prod-1', 'prod-3']);
   });
 
   const fetchCart = () => {
@@ -111,6 +134,11 @@ export const CustomerPortal: React.FC = () => {
       setActivePage('invoice');
     } else {
       setActivePage(page);
+    }
+
+    const targetUrl = page === 'home' ? '/customer' : `/customer/${page}`;
+    if (window.location.pathname.toLowerCase() !== targetUrl) {
+      window.history.pushState(null, '', targetUrl);
     }
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };

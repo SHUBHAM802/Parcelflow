@@ -5,7 +5,8 @@ import { Button } from '../../../shared/components/Button';
 import { Modal } from '../../../shared/components/Modal';
 import { EmptyState } from '../../../shared/components/EmptyState';
 import { useToast } from '../../../shared/store/toastContext';
-import { Boxes, CheckSquare, Square, Printer, Barcode, ArrowRight, ShieldCheck } from 'lucide-react';
+import { ShippingLabel } from '../components/ShippingLabel';
+import { Boxes, CheckSquare, Square, Printer, Barcode, ArrowRight, ShieldCheck, Loader2 } from 'lucide-react';
 
 interface OperatorPackingProps {
   selectedOrderId?: string;
@@ -27,8 +28,10 @@ export const OperatorPacking: React.FC<OperatorPackingProps> = ({
   const [weightGrams, setWeightGrams] = useState<number>(480);
   const [dimensions, setDimensions] = useState<string>('24x18x12 cm');
 
-  // Label Modal
+  // Label Modal & generated label data
   const [isLabelModalOpen, setIsLabelModalOpen] = useState(false);
+  const [labelData, setLabelData] = useState<any>(null);
+  const [labelLoading, setLabelLoading] = useState(false);
 
   const fetchPackingQueue = async () => {
     setIsLoading(true);
@@ -182,10 +185,25 @@ export const OperatorPacking: React.FC<OperatorPackingProps> = ({
                 <Button
                   variant="secondary"
                   size="sm"
-                  onClick={() => setIsLabelModalOpen(true)}
-                  icon={<Barcode className="w-3.5 h-3.5" />}
+                  onClick={async () => {
+                    setLabelLoading(true);
+                    try {
+                      const res = await apiFetch<any>('/warehouse/labels/generate', {
+                        method: 'POST',
+                        body: JSON.stringify({ orderId: activeOrderId })
+                      });
+                      setLabelData(res);
+                      setIsLabelModalOpen(true);
+                    } catch (err: any) {
+                      showToast(err.message || 'Failed to generate label', 'error');
+                    } finally {
+                      setLabelLoading(false);
+                    }
+                  }}
+                  disabled={labelLoading}
+                  icon={labelLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Barcode className="w-3.5 h-3.5" />}
                 >
-                  Preview Shipping Label
+                  {labelLoading ? 'Generating...' : 'Generate & Preview Label'}
                 </Button>
               </div>
 
@@ -292,75 +310,46 @@ export const OperatorPacking: React.FC<OperatorPackingProps> = ({
         </div>
       )}
 
-      {/* Shipping Label Preview Modal */}
-      {currentOrder && (
+      {/* Shipping Label Preview Modal — Real QR Code */}
+      {currentOrder && labelData && (
         <Modal
           isOpen={isLabelModalOpen}
           onClose={() => setIsLabelModalOpen(false)}
           title="Fulfillment Shipping Label"
-          subtitle="Printed sticker applied to top of carton"
+          subtitle={`Parcel ${labelData.parcel?.id || ''} — scannable QR code`}
           maxWidth="md"
           footer={
-            <>
-              <Button variant="secondary" size="sm" onClick={() => setIsLabelModalOpen(false)}>
-                Close
-              </Button>
-              <Button
-                variant="teal"
-                size="sm"
-                onClick={() => {
-                  window.print();
-                  setIsLabelModalOpen(false);
-                }}
-                icon={<Printer className="w-3.5 h-3.5" />}
-              >
-                Print Label
-              </Button>
-            </>
+            <Button variant="secondary" size="sm" onClick={() => setIsLabelModalOpen(false)}>
+              Close
+            </Button>
           }
         >
-          <div className="border-2 border-dashed border-zinc-800 p-6 rounded-xl bg-white text-zinc-950 space-y-4 font-mono text-xs">
-            <div className="flex justify-between items-start border-b-2 border-zinc-950 pb-3">
-              <div>
-                <h3 className="font-bold text-base tracking-tight">PARCELFLOW LOGISTICS</h3>
-                <p className="text-[10px] text-zinc-600">Smart Automated Warehouse Bay 01</p>
-              </div>
-              <div className="text-right">
-                <span className="text-lg font-black bg-black text-white px-2 py-0.5 rounded">
-                  {currentOrder.destination_city.toUpperCase()}
-                </span>
-              </div>
-            </div>
-
-            <div className="space-y-1 text-xs">
-              <span className="text-[10px] uppercase font-bold text-zinc-500">SHIP TO:</span>
-              <p className="font-bold text-sm">{currentOrder.recipient_name || currentOrder.customer_name}</p>
-              <p>{currentOrder.line1}</p>
-              <p>{currentOrder.city}, {currentOrder.state} - {currentOrder.pincode}</p>
-              <p>PH: {currentOrder.recipient_phone || currentOrder.customer_phone}</p>
-            </div>
-
-            <div className="grid grid-cols-3 gap-2 border-y border-zinc-950 py-2 text-center text-[10px]">
-              <div>
-                <span className="text-zinc-500 block">WEIGHT</span>
-                <span className="font-bold">{weightGrams}g</span>
-              </div>
-              <div>
-                <span className="text-zinc-500 block">DEST BIN</span>
-                <span className="font-bold text-teal-800">{currentOrder.assigned_bin || 'AUTO'}</span>
-              </div>
-              <div>
-                <span className="text-zinc-500 block">PAYMENT</span>
-                <span className="font-bold">{currentOrder.payment_method}</span>
-              </div>
-            </div>
-
-            {/* Simulated Barcode */}
-            <div className="flex flex-col items-center justify-center pt-2 space-y-1">
-              <div className="w-full h-12 bg-[repeating-linear-gradient(90deg,#000,#000_2px,#fff_2px,#fff_5px,#000_5px,#000_8px,#fff_8px,#fff_10px,#000_10px,#000_14px)]" />
-              <span className="text-[10px] font-bold tracking-widest">{currentOrder.id}</span>
-            </div>
-          </div>
+          <ShippingLabel
+            orderId={currentOrder.id}
+            parcelId={labelData.parcel?.id || ''}
+            labelPayload={labelData.labelPayload || ''}
+            recipientName={currentOrder.recipient_name || currentOrder.customer_name}
+            addressLine1={currentOrder.line1 || ''}
+            city={currentOrder.city || currentOrder.destination_city}
+            state={currentOrder.state || 'Maharashtra'}
+            pincode={currentOrder.pincode || ''}
+            phone={currentOrder.recipient_phone || currentOrder.customer_phone || ''}
+            weight={weightGrams}
+            dimensions={dimensions}
+            binLabel={labelData.bin?.label || 'AUTO'}
+            binNumber={labelData.bin?.number || 0}
+            categoryName={labelData.bin?.category || 'Unknown'}
+            paymentMethod={currentOrder.payment_method || 'N/A'}
+            onPrint={async () => {
+              try {
+                await apiFetch('/warehouse/labels/printed', {
+                  method: 'POST',
+                  body: JSON.stringify({ parcelId: labelData.parcel?.id })
+                });
+                showToast('Print recorded', 'success');
+              } catch {}
+            }}
+          />
         </Modal>
       )}
     </div>

@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>ParcelFlow Codebase Hierarchy — graphify tree viewer</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      margin: 0;
+      padding: 0;
+      background: #f9f9f9;
+      color: #333;
+    }
+    h1 {
+      margin: 20px 0 0 24px;
+      font-size: 2.2rem;
+      font-weight: bold;
+      color: #1e3a56;
+    }
+    .controls {
+      margin: 20px 0 15px 24px;
+    }
+    button {
+      margin-right: 10px;
+      padding: 8px 18px;
+      background: #007bff;
+      color: #fff;
+      border: none;
+      border-radius: 5px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s ease-in-out;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    button:hover {
+      background: #0056b3;
+    }
+    button:active {
+      background: #004085;
+    }
+    #tree-container {
+      width: calc(100vw - 48px); /* Adjust for body margin/padding */
+      height: 85vh;
+      overflow: auto;
+      border-radius: 8px;
+      background: #fff;
+      margin-left: 24px;
+      margin-right: 24px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      border: 1px solid #ddd;
+    }
+    svg {
+      background: #fff;
+      border-radius: 8px;
+      display: block; /* Important for D3 */
+    }
+    .node circle {
+      stroke-width: 2.5px;
+    }
+    .node text { /* Base style for the <text> container */
+      font: 13px 'Segoe UI', sans-serif;
+      paint-order: stroke fill; /* Ensures text is readable over lines */
+      stroke: #fff; /* White halo */
+      stroke-width: 3px; /* Halo thickness */
+      stroke-linejoin: round;
+      stroke-opacity: 0.85; /* Halo opacity */
+    }
+    .link {
+      fill: none;
+      stroke-opacity: 0.7;
+      stroke-width: 2px;
+    }
+  </style>
+</head>
+<body>
+  <h1>ParcelFlow Codebase Hierarchy — Knowledge Graph</h1>
+  <div class="controls">
+    <button onclick="expandAll()">Expand All</button>
+    <button onclick="collapseAll()">Collapse All</button>
+    <button onclick="resetView()">Reset View</button>
+  </div>
+  <div id="tree-container">
+    <svg id="tree-svg" width="6000" height="8000"></svg>
+  </div>
+
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <script>
+    const initialJsonData = {"name":"ParcelFlow Codebase Hierarchy","total_count":202,"children":[{"name":"AdminAnalytics.tsx","total_count":2,"children":[{"name":"AdminAnalytics()","total_count":1,"children":[]},{"name":"COLORS","total_count":1,"children":[]}]},{"name":"AdminBilling.tsx","total_count":1,"children":[{"name":"AdminBilling()","total_count":1,"children":[]}]},{"name":"AdminCatalog.tsx","total_count":1,"children":[{"name":"AdminCatalog()","total_count":1,"children":[]}]},{"name":"AdminDestinations.tsx","total_count":1,"children":[{"name":"AdminDestinations()","total_count":1,"children":[]}]},{"name":"AdminHeader.tsx","total_count":2,"children":[{"name":"AdminHeader()","total_count":1,"children":[]},{"name":"AdminHeaderProps","total_count":1,"children":[]}]},{"name":"AdminInventory.tsx","total_count":1,"children":[{"name":"AdminInventory()","total_count":1,"children":[]}]},{"name":"AdminMachineAnalytics.tsx","total_count":1,"children":[{"name":"AdminMachineAnalytics()","total_count":1,"children":[]}]},{"name":"AdminOrders.tsx","total_count":1,"children":[{"name":"AdminOrders()","total_count":1,"children":[]}]},{"name":"AdminPortal.tsx","total_count":2,"children":[{"name":"Admin Business Center (Analytics->Inventory->Ledger->Destinations)","total_count":1,"children":[]},{"name":"AdminPortal()","total_count":1,"children":[]}]},{"name":"AdminSettings.tsx","total_count":1,"children":[{"name":"AdminSettings()","total_count":1,"children":[]}]},{"name":"AdminSidebar.tsx","total_count":2,"children":[{"name":"AdminSidebar()","total_count":1,"children":[]},{"name":"AdminSidebarProps","total_count":1,"children":[]}]},{"name":"AGENTS.md","total_count":1,"children":[{"name":"AGENTS.md (AI Agent & Architecture Instructions)","total_count":1,"children":[]}]},{"name":"api.ts","total_count":1,"children":[{"name":"apiFetch()","total_count":1,"children":[]}]},{"name":"App.tsx","total_count":2,"children":[{"name":"App()","total_count":1,"children":[]},{"name":"MainApp()","total_count":1,"children":[]}]},{"name":"ARCHITECTURE.md","total_count":1,"children":[{"name":"ARCHITECTURE.md (System Architecture)","total_count":1,"children":[]}]},{"name":"auth.ts","total_count":15,"children":[{"name":"AuthenticatedRequest","total_count":1,"children":[]},{"name":"base64UrlDecode()","total_count":1,"children":[]},{"name":"base64UrlEncode()","total_count":1,"children":[]},{"name":"extractUserFromRequest()","total_count":1,"children":[]},{"name":"generateToken()","total_count":1,"children":[]},{"name":"hashPassword()","total_count":1,"children":[]},{"name":"loginAttempts","total_count":1,"children":[]},{"name":"loginRateLimiter()","total_count":1,"children":[]},{"name":"RateLimitRecord","total_count":1,"children":[]},{"name":"requireAuth()","total_count":1,"children":[]},{"name":"requireRole()","total_count":1,"children":[]},{"name":"Role-Based Access Control (RBAC)","total_count":1,"children":[]},{"name":"TokenPayload","total_count":1,"children":[]},{"name":"verifyPassword()","total_count":1,"children":[]},{"name":"verifyToken()","total_count":1,"children":[]}]},{"name":"authContext.tsx","total_count":4,"children":[{"name":"AuthContext","total_count":1,"children":[]},{"name":"AuthContextType","total_count":1,"children":[]},{"name":"AuthProvider()","total_count":1,"children":[]},{"name":"useAuth()","total_count":1,"children":[]}]},{"name":"Button.tsx","total_count":2,"children":[{"name":"Button()","total_count":1,"children":[]},{"name":"ButtonProps","total_count":1,"children":[]}]},{"name":"Card.tsx","total_count":2,"children":[{"name":"Card()","total_count":1,"children":[]},{"name":"CardProps","total_count":1,"children":[]}]},{"name":"CartDrawer.tsx","total_count":2,"children":[{"name":"CartDrawer()","total_count":1,"children":[]},{"name":"CartDrawerProps","total_count":1,"children":[]}]},{"name":"CODE_STYLE.md","total_count":1,"children":[{"name":"CODE_STYLE.md (Code Style & Conventions)","total_count":1,"children":[]}]},{"name":"CustomerCatalog.tsx","total_count":2,"children":[{"name":"CustomerCatalog()","total_count":1,"children":[]},{"name":"CustomerCatalogProps","total_count":1,"children":[]}]},{"name":"CustomerCheckout.tsx","total_count":2,"children":[{"name":"CustomerCheckout()","total_count":1,"children":[]},{"name":"CustomerCheckoutProps","total_count":1,"children":[]}]},{"name":"CustomerHeader.tsx","total_count":2,"children":[{"name":"CustomerHeader()","total_count":1,"children":[]},{"name":"CustomerHeaderProps","total_count":1,"children":[]}]},{"name":"CustomerHome.tsx","total_count":2,"children":[{"name":"CustomerHome()","total_count":1,"children":[]},{"name":"CustomerHomeProps","total_count":1,"children":[]}]},{"name":"CustomerInvoice.tsx","total_count":2,"children":[{"name":"CustomerInvoice()","total_count":1,"children":[]},{"name":"CustomerInvoiceProps","total_count":1,"children":[]}]},{"name":"CustomerOrders.tsx","total_count":2,"children":[{"name":"CustomerOrders()","total_count":1,"children":[]},{"name":"CustomerOrdersProps","total_count":1,"children":[]}]},{"name":"CustomerPortal.tsx","total_count":2,"children":[{"name":"Customer Storefront Flow (Catalog->Cart->Checkout->Orders)","total_count":1,"children":[]},{"name":"CustomerPortal()","total_count":1,"children":[]}]},{"name":"CustomerProductDetail.tsx","total_count":2,"children":[{"name":"CustomerProductDetail()","total_count":1,"children":[]},{"name":"CustomerProductDetailProps","total_count":1,"children":[]}]},{"name":"CustomerProfile.tsx","total_count":1,"children":[{"name":"CustomerProfile()","total_count":1,"children":[]}]},{"name":"CustomerTracking.tsx","total_count":2,"children":[{"name":"CustomerTracking()","total_count":1,"children":[]},{"name":"CustomerTrackingProps","total_count":1,"children":[]}]},{"name":"CustomerWishlist.tsx","total_count":2,"children":[{"name":"CustomerWishlist()","total_count":1,"children":[]},{"name":"CustomerWishlistProps","total_count":1,"children":[]}]},{"name":"db.ts","total_count":26,"children":[{"name":"addresses (Database Table)","total_count":1,"children":[]},{"name":"alerts (Database Table)","total_count":1,"children":[]},{"name":"applyPragmasAndIndexes()","total_count":1,"children":[]},{"name":"cart_items (Database Table)","total_count":1,"children":[]},{"name":"DB_FILE","total_count":1,"children":[]},{"name":"destinations (Database Table)","total_count":1,"children":[]},{"name":"getDb()","total_count":1,"children":[]},{"name":"initSchemaAndSeed()","total_count":1,"children":[]},{"name":"inventory (Database Table)","total_count":1,"children":[]},{"name":"invoices (Database Table)","total_count":1,"children":[]},{"name":"migrateUserPasswords()","total_count":1,"children":[]},{"name":"order_items (Database Table)","total_count":1,"children":[]},{"name":"order_status_history (Database Table)","total_count":1,"children":[]},{"name":"orders (Database Table)","total_count":1,"children":[]},{"name":"packing_tasks (Database Table)","total_count":1,"children":[]},{"name":"password_reset_tokens (Database Table)","total_count":1,"children":[]},{"name":"picking_tasks (Database Table)","total_count":1,"children":[]},{"name":"products (Database Table)","total_count":1,"children":[]},{"name":"query()","total_count":1,"children":[]},{"name":"queryOne()","total_count":1,"children":[]},{"name":"run()","total_count":1,"children":[]},{"name":"saveDb()","total_count":1,"children":[]},{"name":"sorting_logs (Database Table)","total_count":1,"children":[]},{"name":"transaction()","total_count":1,"children":[]},{"name":"users (Database Table)","total_count":1,"children":[]},{"name":"wishlist_items (Database Table)","total_count":1,"children":[]}]},{"name":"DESIGN_SYSTEM.md","total_count":1,"children":[{"name":"DESIGN_SYSTEM.md (Visual Design System)","total_count":1,"children":[]}]},{"name":"Drawer.tsx","total_count":2,"children":[{"name":"Drawer()","total_count":1,"children":[]},{"name":"DrawerProps","total_count":1,"children":[]}]},{"name":"EmptyState.tsx","total_count":2,"children":[{"name":"EmptyState()","total_count":1,"children":[]},{"name":"EmptyStateProps","total_count":1,"children":[]}]},{"name":"firebase.ts","total_count":3,"children":[{"name":"Firebase Google OAuth Flow (/auth/google)","total_count":1,"children":[]},{"name":"firebaseConfig","total_count":1,"children":[]},{"name":"isFirebaseConfigured()","total_count":1,"children":[]}]},{"name":"formatters.ts","total_count":4,"children":[{"name":"formatDate()","total_count":1,"children":[]},{"name":"formatDateTime()","total_count":1,"children":[]},{"name":"formatINR()","total_count":1,"children":[]},{"name":"getStatusTheme()","total_count":1,"children":[]}]},{"name":"index.ts","total_count":13,"children":[{"name":"Automated Hardware Simulation (IR->Camera->RoboticArm->Sort)","total_count":1,"children":[]},{"name":"emergencyStop()","total_count":1,"children":[]},{"name":"getMachineState()","total_count":1,"children":[]},{"name":"initHardwareSimulator()","total_count":1,"children":[]},{"name":"logMachineStatus()","total_count":1,"children":[]},{"name":"MachineState","total_count":1,"children":[]},{"name":"pauseConveyor()","total_count":1,"children":[]},{"name":"processNextOrder()","total_count":1,"children":[]},{"name":"simulateFault()","total_count":1,"children":[]},{"name":"sleep()","total_count":1,"children":[]},{"name":"startConveyor()","total_count":1,"children":[]},{"name":"stopConveyor()","total_count":1,"children":[]},{"name":"updateOrderStatus()","total_count":1,"children":[]}]},{"name":"KPICard.tsx","total_count":2,"children":[{"name":"KPICard()","total_count":1,"children":[]},{"name":"KPICardProps","total_count":1,"children":[]}]},{"name":"LoginPage.tsx","total_count":2,"children":[{"name":"Email/Password Authentication Flow","total_count":1,"children":[]},{"name":"LoginPage()","total_count":1,"children":[]}]},{"name":"Modal.tsx","total_count":2,"children":[{"name":"Modal()","total_count":1,"children":[]},{"name":"ModalProps","total_count":1,"children":[]}]},{"name":"OperatorAlerts.tsx","total_count":1,"children":[{"name":"OperatorAlerts()","total_count":1,"children":[]}]},{"name":"OperatorConveyor.tsx","total_count":2,"children":[{"name":"OperatorConveyor()","total_count":1,"children":[]},{"name":"OperatorConveyorProps","total_count":1,"children":[]}]},{"name":"OperatorDashboard.tsx","total_count":2,"children":[{"name":"OperatorDashboard()","total_count":1,"children":[]},{"name":"OperatorDashboardProps","total_count":1,"children":[]}]},{"name":"OperatorHeader.tsx","total_count":2,"children":[{"name":"OperatorHeader()","total_count":1,"children":[]},{"name":"OperatorHeaderProps","total_count":1,"children":[]}]},{"name":"OperatorInventory.tsx","total_count":1,"children":[{"name":"OperatorInventory()","total_count":1,"children":[]}]},{"name":"OperatorLogs.tsx","total_count":1,"children":[{"name":"OperatorLogs()","total_count":1,"children":[]}]},{"name":"OperatorOrdersQueue.tsx","total_count":2,"children":[{"name":"OperatorOrdersQueue()","total_count":1,"children":[]},{"name":"OperatorOrdersQueueProps","total_count":1,"children":[]}]},{"name":"OperatorPacking.tsx","total_count":2,"children":[{"name":"OperatorPacking()","total_count":1,"children":[]},{"name":"OperatorPackingProps","total_count":1,"children":[]}]},{"name":"OperatorPicking.tsx","total_count":2,"children":[{"name":"OperatorPicking()","total_count":1,"children":[]},{"name":"OperatorPickingProps","total_count":1,"children":[]}]},{"name":"OperatorPortal.tsx","total_count":2,"children":[{"name":"Operator Warehouse Flow (Queue->Pick->Pack->Infeed)","total_count":1,"children":[]},{"name":"OperatorPortal()","total_count":1,"children":[]}]},{"name":"OperatorSidebar.tsx","total_count":2,"children":[{"name":"OperatorSidebar()","total_count":1,"children":[]},{"name":"OperatorSidebarProps","total_count":1,"children":[]}]},{"name":"orderStateMachine.ts","total_count":4,"children":[{"name":"isValidTransition()","total_count":1,"children":[]},{"name":"OrderStatus","total_count":1,"children":[]},{"name":"transitionOrderStatus()","total_count":1,"children":[]},{"name":"VALID_TRANSITIONS","total_count":1,"children":[]}]},{"name":"PortalSwitcherHeader.tsx","total_count":1,"children":[{"name":"PortalSwitcherHeader()","total_count":1,"children":[]}]},{"name":"PRD.md","total_count":1,"children":[{"name":"PRD.md (Product Requirements Document)","total_count":1,"children":[]}]},{"name":"README.md","total_count":1,"children":[{"name":"README.md (ParcelFlow Overview & Setup)","total_count":1,"children":[]}]},{"name":"routes.ts","total_count":1,"children":[{"name":"createApiRouter()","total_count":1,"children":[]}]},{"name":"SECURITY.md","total_count":1,"children":[{"name":"SECURITY.md (Security & RBAC Specification)","total_count":1,"children":[]}]},{"name":"seed.ts","total_count":1,"children":[{"name":"seedDatabase()","total_count":1,"children":[]}]},{"name":"server.ts","total_count":1,"children":[{"name":"startServer()","total_count":1,"children":[]}]},{"name":"Skeleton.tsx","total_count":1,"children":[{"name":"Skeleton()","total_count":1,"children":[]}]},{"name":"socket.ts","total_count":2,"children":[{"name":"getSocket()","total_count":1,"children":[]},{"name":"initSocket()","total_count":1,"children":[]}]},{"name":"StatusDotPill.tsx","total_count":2,"children":[{"name":"StatusDotPill()","total_count":1,"children":[]},{"name":"StatusDotPillProps","total_count":1,"children":[]}]},{"name":"StatusPill.tsx","total_count":2,"children":[{"name":"StatusPill()","total_count":1,"children":[]},{"name":"StatusPillProps","total_count":1,"children":[]}]},{"name":"Stepper.tsx","total_count":5,"children":[{"name":"OrderTimeline()","total_count":1,"children":[]},{"name":"OrderTimelineProps","total_count":1,"children":[]},{"name":"StepItem","total_count":1,"children":[]},{"name":"Stepper()","total_count":1,"children":[]},{"name":"StepperProps","total_count":1,"children":[]}]},{"name":"Table.tsx","total_count":3,"children":[{"name":"Column","total_count":1,"children":[]},{"name":"Table()","total_count":1,"children":[]},{"name":"TableProps","total_count":1,"children":[]}]},{"name":"Tabs.tsx","total_count":3,"children":[{"name":"TabItem","total_count":1,"children":[]},{"name":"Tabs()","total_count":1,"children":[]},{"name":"TabsProps","total_count":1,"children":[]}]},{"name":"TESTING.md","total_count":1,"children":[{"name":"TESTING.md (Testing Guide & Test Cases)","total_count":1,"children":[]}]},{"name":"toastContext.tsx","total_count":5,"children":[{"name":"Toast","total_count":1,"children":[]},{"name":"ToastContext","total_count":1,"children":[]},{"name":"ToastContextType","total_count":1,"children":[]},{"name":"ToastProvider()","total_count":1,"children":[]},{"name":"useToast()","total_count":1,"children":[]}]},{"name":"types.ts","total_count":22,"children":[{"name":"Address","total_count":1,"children":[]},{"name":"AlertItem","total_count":1,"children":[]},{"name":"CartItem","total_count":1,"children":[]},{"name":"Category","total_count":1,"children":[]},{"name":"DashboardData","total_count":1,"children":[]},{"name":"Destination","total_count":1,"children":[]},{"name":"ExpenseItem","total_count":1,"children":[]},{"name":"Invoice","total_count":1,"children":[]},{"name":"MachineState","total_count":1,"children":[]},{"name":"Order","total_count":1,"children":[]},{"name":"OrderItem","total_count":1,"children":[]},{"name":"OrderStatus","total_count":1,"children":[]},{"name":"OrderStatusHistory","total_count":1,"children":[]},{"name":"PackingTask","total_count":1,"children":[]},{"name":"PaymentStatus","total_count":1,"children":[]},{"name":"PickingTask","total_count":1,"children":[]},{"name":"Product","total_count":1,"children":[]},{"name":"Review","total_count":1,"children":[]},{"name":"Role","total_count":1,"children":[]},{"name":"SortingLog","total_count":1,"children":[]},{"name":"User","total_count":1,"children":[]},{"name":"WarehouseQueue","total_count":1,"children":[]}]},{"name":"main.tsx","total_count":1,"children":[]},{"name":"vite.config.ts","total_count":1,"children":[]}]};
+
+    function transformData(jsonData) {
+        // Helper function to recursively build the children structure
+        function processNode(node, parentL1StageName) {
+            let displayName = node.name;
+            // Append total_count if it exists and is not already in the name
+            if (node.total_count !== undefined) {
+                if (!/\(Total Count: \d+\)$/.test(displayName)) {
+                    displayName += ` (Total Count: ${node.total_count})`;
+                }
+            }
+
+            const newNode = { name: displayName };
+
+            if (parentL1StageName === "Root") {
+                 newNode.originalStageName = node.name;
+            } else {
+                newNode.originalStageName = parentL1StageName;
+            }
+
+            if (node.children && node.children.length > 0) {
+                const stageNameToPass = (parentL1StageName === "Root") ? node.name : parentL1StageName;
+                newNode.children = node.children.map(child => processNode(child, stageNameToPass));
+            }
+
+            return newNode;
+        }
+
+        let rootDisplayName = jsonData.name;
+        if (jsonData.total_count !== undefined && !/\(Total Count: \d+\)$/.test(rootDisplayName)) {
+            rootDisplayName += ` (Total Count: ${jsonData.total_count})`;
+        }
+
+        return {
+            name: rootDisplayName,
+            originalStageName: "Root",
+            children: (jsonData.children || []).map(child => processNode(child, "Root"))
+        };
+    }
+
+    const treeData = transformData(initialJsonData);
+
+    // Auto-populated phaseColors: every depth-1 child of the root gets
+    // a stable colour from a bigger palette so all top-level dirs are
+    // distinguishable.
+    const PALETTE = [
+      ["#3498DB","#2980B9","#AED6F1"], ["#2ECC71","#27AE60","#A9DFBF"],
+      ["#E74C3C","#C0392B","#F5B7B1"], ["#9B59B6","#8E44AD","#D7BDE2"],
+      ["#F39C12","#D68910","#FAD7A0"], ["#1ABC9C","#117864","#A2D9CE"],
+      ["#34495E","#1B2631","#ABB2B9"], ["#E67E22","#BA4A00","#F5CBA7"],
+      ["#16A085","#0E6655","#A2D9CE"], ["#D35400","#A04000","#EDBB99"],
+      ["#7F8C8D","#566573","#D5DBDB"], ["#C0392B","#7B241C","#F5B7B1"],
+      ["#2E86C1","#1B4F72","#A9CCE3"], ["#28B463","#196F3D","#A9DFBF"],
+      ["#AF7AC5","#6C3483","#D2B4DE"],
+    ];
+    const phaseColors = { "Root": { fill: "#4A4A4A", stroke: "#333333", collapsedFill: "#6C757D" },
+                          "Default": { fill: "#BDC3C7", stroke: "#95A5A6", collapsedFill: "#ECF0F1" } };
+    (initialJsonData.children || []).forEach((c, i) => {
+      const pal = PALETTE[i % PALETTE.length];
+      phaseColors[c.name] = { fill: pal[0], stroke: pal[1], collapsedFill: pal[2] };
+    });
+
+    const levelSpecificPalettes = {
+      0: { fill: "#4A4A4A", stroke: "#333333", collapsedFill: "#6C757D" },
+      2: { fill: "#6ab04c", stroke: "#508a38", collapsedFill: "#a3d391" },
+      3: { fill: "#f0932b", stroke: "#d0730f", collapsedFill: "#f6c07e" },
+      4: { fill: "#be2edd", stroke: "#a01cb3", collapsedFill: "#e08bf2" },
+      5: { fill: "#00a8ff", stroke: "#007ac1", collapsedFill: "#74d2ff" },
+      6: { fill: "#e55039", stroke: "#c23620", collapsedFill: "#f09a8d" },
+      default: { fill: "#747d8c", stroke: "#57606f", collapsedFill: "#a4b0be" }
+    };
+
+    const svgElement = d3.select("#tree-svg");
+    const initialSvgWidth = +svgElement.attr("width");
+    const initialSvgHeight = +svgElement.attr("height");
+    const margin = { top: 40, right: 120, bottom: 80, left: 450 };
+    let width = initialSvgWidth - margin.left - margin.right;
+    let height = initialSvgHeight - margin.top - margin.bottom;
+    const duration = 500;
+    let nodeCounter = 0;
+    const g = svgElement.append("g").attr("transform", `translate(${margin.left},${margin.top})`);
+    const treemap = d3.tree().nodeSize([40, 0]);
+    let rootNode = d3.hierarchy(treeData, d => d.children);
+    rootNode.x0 = 0;
+    rootNode.y0 = 0;
+
+    if (rootNode.children) {
+      rootNode.children.forEach(d_child => {
+        if (d_child.children) { collapseBranch(d_child); }
+      });
+    }
+    updateTree(rootNode);
+
+    function collapseBranch(d) { if (d.children) { d._children = d.children; d._children.forEach(collapseBranch); d.children = null; } }
+    function expandBranch(d) { if (d._children) { d.children = d._children; d._children = null; } if (d.children) { d.children.forEach(expandBranch); } }
+    window.expandAll = () => { expandBranch(rootNode); updateTree(rootNode); };
+    window.collapseAll = () => { if (rootNode.children) { rootNode.children.forEach(collapseBranch); } updateTree(rootNode); };
+    window.resetView = () => { if (rootNode.children) { rootNode.children.forEach(d_child => { if (d_child.children || d_child._children) { collapseBranch(d_child); } }); } if (rootNode._children && !rootNode.children) { rootNode.children = rootNode._children; rootNode._children = null; } updateTree(rootNode); };
+
+    function updateTree(source) {
+      const treeLayoutData = treemap(rootNode);
+      let nodes = treeLayoutData.descendants();
+      let links = treeLayoutData.descendants().slice(1);
+
+      let minX = 0;
+      let maxX = 0;
+      if (nodes.length > 0) {
+        minX = d3.min(nodes, d => d.x);
+        maxX = d3.max(nodes, d => d.x);
+      }
+
+      let neededHeight = Math.max(initialSvgHeight, maxX - minX + margin.top + margin.bottom + 100);
+      svgElement.transition().duration(duration / 2).attr("height", neededHeight);
+      g.transition().duration(duration / 2).attr("transform", `translate(${margin.left},${margin.top - minX + 40})`);
+
+      nodes.forEach(d => { d.y = d.depth * 400; }); // Adjust horizontal separation if needed
+
+      const node = g.selectAll('g.node').data(nodes, d => d.id || (d.id = ++nodeCounter));
+      const nodeEnter = node.enter().append('g')
+        .attr('class', d => "node" + (d.children || d._children ? " node--internal" : " node--leaf") + (d._children ? " _children" : ""))
+        .attr('transform', d => `translate(${source.y0},${source.x0})`)
+        .on('click', (event, d) => { if (d.children) { d._children = d.children; d.children = null; } else if (d._children) { d.children = d._children; d._children = null; } updateTree(d); })
+        .style('cursor', d => (d.children || d._children) ? 'pointer' : 'default');
+
+      nodeEnter.append('circle').attr('r', 1e-6);
+
+      nodeEnter.append('text')
+        .attr('dy', '.35em')
+        .attr('x', d => d.children || d._children ? -14 : 14)
+        .attr('text-anchor', d => d.children || d._children ? 'end' : 'start')
+        .style("fill-opacity", 1e-6)
+        .call(wrapText, 380);
+
+      const nodeUpdate = nodeEnter.merge(node);
+      nodeUpdate.transition().duration(duration)
+        .attr('transform', d => `translate(${d.y},${d.x})`)
+        .attr('class', d => "node" + (d.children ? " node--internal" : " node--leaf") + (d._children ? " node--internal _children" : ""));
+
+      nodeUpdate.select('circle').attr('r', 8.5)
+        .style('fill', d => {
+            let palette;
+            if (d.depth === 0) {
+                palette = levelSpecificPalettes[0];
+            } else if (d.depth === 1) {
+                palette = phaseColors[d.data.originalStageName] || phaseColors.Default;
+            } else {
+                palette = levelSpecificPalettes[d.depth] || levelSpecificPalettes.default;
+            }
+            if (d._children) return palette.collapsedFill;
+            if (d.children) return palette.fill;
+            return "#fff";
+        })
+        .style('stroke', d => {
+            let palette;
+            if (d.depth === 0) {
+                palette = levelSpecificPalettes[0];
+            } else if (d.depth === 1) {
+                palette = phaseColors[d.data.originalStageName] || phaseColors.Default;
+            } else {
+                palette = levelSpecificPalettes[d.depth] || levelSpecificPalettes.default;
+            }
+            return palette.stroke;
+        });
+      nodeUpdate.select('text').style("fill-opacity", 1).call(wrapText, 380);
+
+      const nodeExit = node.exit().transition().duration(duration).attr('transform', d => `translate(${source.y},${source.x})`).remove();
+      nodeExit.select('circle').attr('r', 1e-6);
+      nodeExit.select('text').style('fill-opacity', 1e-6);
+
+      const link = g.selectAll('path.link').data(links, d => d.id);
+      const linkEnter = link.enter().insert('path', "g").attr('class', 'link').attr('d', d => { const o = { x: source.x0, y: source.y0 }; return diagonal(o, o); });
+
+      linkEnter.merge(link).transition().duration(duration).attr('d', d => diagonal(d, d.parent))
+        .style('stroke', d => {
+            const sourceNode = d.parent;
+            if (!sourceNode) return phaseColors.Default.stroke;
+            const l1AncestorName = sourceNode.data.originalStageName;
+            const colorPalette = phaseColors[l1AncestorName] || phaseColors.Default;
+            return colorPalette.stroke;
+        });
+      link.exit().transition().duration(duration).attr('d', d => { const o = { x: source.x, y: source.y }; return diagonal(o, o); }).remove();
+      nodes.forEach(d => { d.x0 = d.x; d.y0 = d.y; });
+    }
+
+    function diagonal(s, d) { return `M ${s.y} ${s.x} C ${(s.y + d.y) / 2} ${s.x}, ${(s.y + d.y) / 2} ${d.x}, ${d.y} ${d.x}`; }
+
+    function wrapText(textElements, maxWidth) {
+        const textPartColors = {
+            name: '#343a40',
+            count: '#0056b3'
+        };
+        const countRegex = /(\s\(Total Count: \d+\))$/;
+
+        textElements.each(function () {
+            const textD3 = d3.select(this);
+            const originalNodeText = textD3.datum().data.name;
+            const x = parseFloat(textD3.attr("x") || 0);
+            const initialDy = textD3.attr("dy");
+            const textAnchor = textD3.attr("text-anchor");
+            const lineHeight = 1.1;
+
+            textD3.text(null);
+
+            let namePart = originalNodeText;
+            let countPartText = "";
+
+            const countMatch = originalNodeText.match(countRegex);
+            if (countMatch && originalNodeText.endsWith(countMatch[0])) {
+                namePart = originalNodeText.substring(0, originalNodeText.length - countMatch[0].length).trim();
+                countPartText = countMatch[0].trim();
+            }
+
+            const tokens = [];
+            namePart.split(/\s+/).filter(Boolean).forEach(word => {
+                tokens.push({ text: word, type: 'name' });
+            });
+            if (countPartText) {
+                tokens.push({ text: countPartText, type: 'count' });
+            }
+
+            if (tokens.length === 0 && originalNodeText) {
+                tokens.push({ text: originalNodeText, type: 'name' });
+            }
+
+            let currentTspan = textD3.append("tspan").attr("x", x).attr("dy", initialDy);
+            if (textAnchor === "end") currentTspan.attr("text-anchor", "end");
+
+            let lineTokens = [];
+
+            for (let i = 0; i < tokens.length; i++) {
+                const tokenObj = tokens[i];
+
+                lineTokens.push(tokenObj);
+                currentTspan.text(lineTokens.map(t => t.text).join(" "));
+
+                if (currentTspan.node().getComputedTextLength() > maxWidth && lineTokens.length > 1) {
+                    lineTokens.pop();
+
+                    currentTspan.text(null);
+                    lineTokens.forEach((prevToken, idx) => {
+                        currentTspan.append("tspan")
+                            .text((idx > 0 ? " " : "") + prevToken.text)
+                            .style("fill", textPartColors[prevToken.type] || textPartColors.name)
+                            .style("font-weight", prevToken.type === 'count' ? "bold" : "normal");
+                    });
+
+                    lineTokens = [tokenObj];
+                    currentTspan = textD3.append("tspan").attr("x", x).attr("dy", lineHeight + "em");
+                    if (textAnchor === "end") currentTspan.attr("text-anchor", "end");
+                }
+            }
+
+            currentTspan.text(null);
+            lineTokens.forEach((token, idx) => {
+                currentTspan.append("tspan")
+                    .text((idx > 0 ? " " : "") + token.text)
+                    .style("fill", textPartColors[token.type] || textPartColors.name)
+                    .style("font-weight", token.type === 'count' ? "bold" : "normal");
+            });
+
+            if (textD3.selectAll("tspan > tspan").empty() && textD3.select("tspan").text().length === 0 && originalNodeText) {
+                let t = textD3.select("tspan");
+                let displayText = originalNodeText;
+                t.text(displayText).style("fill", textPartColors.name);
+                if (t.node() && t.node().getComputedTextLength() > maxWidth && displayText.length > 20) {
+                    let estimatedChars = Math.floor(maxWidth / (t.node().getComputedTextLength()/displayText.length) );
+                    displayText = displayText.substring(0, Math.max(0, estimatedChars - 3)) + "...";
+                    t.text(displayText);
+                }
+            }
+        });
+    }
+  </script>
+</body>
+</html>
