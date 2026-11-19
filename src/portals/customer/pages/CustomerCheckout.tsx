@@ -227,6 +227,11 @@ export const CustomerCheckout: React.FC<CustomerCheckoutProps> = ({
                 <p className="text-xs text-zinc-500 mt-0.5">Transactions are securely processed with 256-bit encryption.</p>
               </div>
 
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-900 text-xs flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
+                <span><strong>Demo payment</strong> &mdash; no real transaction is processed. Do not enter real card details.</span>
+              </div>
+
               <div className="grid grid-cols-3 gap-3">
                 <button
                   type="button"

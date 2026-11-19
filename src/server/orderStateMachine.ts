@@ -10,9 +10,15 @@ export type OrderStatus =
   | 'PACKED'
   | 'ON_CONVEYOR'
   | 'CONVEYOR_QUEUED'
+  | 'IR1_DETECTED'
+  | 'SCANNING'
+  | 'SCANNED'
+  | 'ROUTE_IDENTIFIED'
   | 'DETECTED'
+  | 'AT_PICK_POINT'
   | 'SORTING'
   | 'SORTED'
+  | 'DISPOSED'
   | 'DISPATCHED'
   | 'DELIVERED'
   | 'CANCELLED'
@@ -24,12 +30,18 @@ const VALID_TRANSITIONS: Record<string, string[]> = {
   PICKING: ['PICKED', 'CANCELLED'],
   PICKED: ['PACKING', 'PACKED', 'CANCELLED'],
   PACKING: ['PACKED', 'CANCELLED'],
-  PACKED: ['ON_CONVEYOR', 'CONVEYOR_QUEUED'],
-  CONVEYOR_QUEUED: ['ON_CONVEYOR', 'DETECTED'],
-  ON_CONVEYOR: ['DETECTED', 'CANCELLED'],
-  DETECTED: ['SORTING', 'CANCELLED'],
-  SORTING: ['SORTED', 'CANCELLED', 'CONFIRMED'],
+  PACKED: ['ON_CONVEYOR', 'CONVEYOR_QUEUED', 'IR1_DETECTED', 'SCANNING', 'SCANNED'],
+  CONVEYOR_QUEUED: ['ON_CONVEYOR', 'IR1_DETECTED', 'SCANNING', 'DETECTED'],
+  ON_CONVEYOR: ['IR1_DETECTED', 'SCANNING', 'SCANNED', 'ROUTE_IDENTIFIED', 'DETECTED', 'AT_PICK_POINT', 'SORTING', 'CANCELLED'],
+  IR1_DETECTED: ['SCANNING', 'SCANNED', 'ROUTE_IDENTIFIED', 'CANCELLED'],
+  SCANNING: ['SCANNED', 'ROUTE_IDENTIFIED', 'DISPOSED', 'CANCELLED'],
+  ROUTE_IDENTIFIED: ['DETECTED', 'AT_PICK_POINT', 'SORTING', 'CANCELLED'],
+  SCANNED: ['ROUTE_IDENTIFIED', 'DETECTED', 'AT_PICK_POINT', 'SORTING', 'DISPOSED', 'CANCELLED'],
+  DETECTED: ['AT_PICK_POINT', 'SORTING', 'DISPOSED', 'CANCELLED'],
+  AT_PICK_POINT: ['SORTING', 'DISPOSED', 'CANCELLED'],
+  SORTING: ['SORTED', 'DISPOSED', 'CANCELLED', 'CONFIRMED'],
   SORTED: ['DISPATCHED'],
+  DISPOSED: ['CONFIRMED', 'CANCELLED', 'PACKED'],
   DISPATCHED: ['DELIVERED'],
   DELIVERED: ['RETURN_REQUESTED'],
   CANCELLED: [],
@@ -48,7 +60,8 @@ export function transitionOrderStatus(
   newStatus: string,
   note: string,
   io?: SocketIOServer | null,
-  isAdmin = false
+  isAdmin = false,
+  changedBy?: string
 ): { success: boolean; error?: string; oldStatus?: string } {
   const current = queryOne<{ status: string }>("SELECT status FROM orders WHERE id = ?", [orderId]);
   if (!current) {
@@ -67,10 +80,10 @@ export function transitionOrderStatus(
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   run("UPDATE orders SET status = ?, updated_at = ? WHERE id = ?", [newStatus, now, orderId]);
 
-  const histId = `hist-${orderId}-${Date.now()}`;
+  const histId = `hist-${orderId}-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   run(
-    "INSERT INTO order_status_history (id, order_id, status, note, changed_at) VALUES (?, ?, ?, ?, ?)",
-    [histId, orderId, newStatus, note || `Transitioned to ${newStatus}`, now]
+    "INSERT INTO order_status_history (id, order_id, status, note, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?)",
+    [histId, orderId, newStatus, note || `Transitioned to ${newStatus}`, changedBy || null, now]
   );
 
   if (io) {
