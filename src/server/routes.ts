@@ -344,13 +344,18 @@ export function createApiRouter(io: SocketIOServer) {
     );
 
     // In production, this token would be sent via email/SMS.
-    // For development/demo, we return it in the response.
-    return res.json({
+    // For development/demo, we return it in the response so testers can use it.
+    const cfg = getConfig();
+    const response: Record<string, any> = {
       success: true,
-      message: 'Password reset token generated. In production, this would be sent to your email.',
-      token,
-      email: cleanEmail
-    });
+      message: 'If an account with that email exists, a password reset token has been generated.'
+    };
+    if (cfg.NODE_ENV === 'development') {
+      response.message = 'Password reset token generated. In production, this would be sent to your email.';
+      response.token = token;
+      response.email = cleanEmail;
+    }
+    return res.json(response);
   });
 
   // Reset Password: Validate token and update password
@@ -1022,11 +1027,14 @@ export function createApiRouter(io: SocketIOServer) {
       });
     }
 
-    // 2. Lookup destination city from address
+    // 2. Lookup destination city from address (validate ownership)
     let destinationCity = 'Pune';
     if (addressId) {
-      const address = queryOne<{ city: string }>('SELECT city FROM addresses WHERE id = ?', [addressId]);
-      if (address && address.city) {
+      const address = queryOne<{ city: string; customer_id: string }>('SELECT city, customer_id FROM addresses WHERE id = ? AND customer_id = ?', [addressId, user.id]);
+      if (!address) {
+        return res.status(403).json({ error: 'Address not found or does not belong to this account' });
+      }
+      if (address.city) {
         destinationCity = address.city;
       }
     }
@@ -1057,12 +1065,16 @@ export function createApiRouter(io: SocketIOServer) {
     const lowStockAlerts: { productId: string; productName: string; remaining: number }[] = [];
 
     // 5. Execute transaction: Atomic creation and inventory decrement
+    const paymentStatus = paymentMethod === 'COD' ? 'PENDING' : 'PAID';
+    const paymentNote = paymentMethod === 'COD'
+      ? 'Cash on Delivery — payment collected upon delivery'
+      : `Demo ${paymentMethod} payment verified (simulated)`;
     try {
       transaction(() => {
         run(
           `INSERT INTO orders (id, customer_id, address_id, destination_city, status, payment_status, payment_method, subtotal, gst_amount, total_amount, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'CONFIRMED', 'PAID', ?, ?, ?, ?, ?, ?)`,
-          [orderId, user.id, addressId || null, destinationCity, paymentMethod || 'UPI', subtotal, gst, total, now, now]
+          VALUES (?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?, ?, ?, ?)`,
+          [orderId, user.id, addressId || null, destinationCity, paymentStatus, paymentMethod || 'UPI', subtotal, gst, total, now, now]
         );
 
         for (const item of validatedItems) {
@@ -1105,17 +1117,20 @@ export function createApiRouter(io: SocketIOServer) {
           [`hist-${orderId}-1`, orderId, now]
         );
         run(
-          "INSERT INTO order_status_history (id, order_id, status, note, changed_at) VALUES (?, ?, 'CONFIRMED', 'Payment verified successfully', ?)",
-          [`hist-${orderId}-2`, orderId, now]
+          "INSERT INTO order_status_history (id, order_id, status, note, changed_at) VALUES (?, ?, 'CONFIRMED', ?, ?)",
+          [`hist-${orderId}-2`, orderId, paymentNote, now]
         );
 
         // Picking task
         run("INSERT INTO picking_tasks (id, order_id, status) VALUES (?, ?, 'PENDING')", [`pick-${orderId}`, orderId]);
 
         // Invoice record
-        run("INSERT INTO invoices (id, order_id, gstin, issued_at) VALUES (?, ?, '27AABCP1234F1Z9', ?)", [
+        // PLACEHOLDER GSTIN — replace with real GSTIN for production use
+        const PLACEHOLDER_GSTIN = '27AABCP1234F1Z9';
+        run("INSERT INTO invoices (id, order_id, gstin, issued_at) VALUES (?, ?, ?, ?)", [
           invoiceId,
           orderId,
+          PLACEHOLDER_GSTIN,
           now
         ]);
 
@@ -1129,13 +1144,15 @@ export function createApiRouter(io: SocketIOServer) {
       return res.status(500).json({ error: 'Order creation failed. Please try again.' });
     }
 
-    // 6. Emit real-time updates via Socket.io
-    io.emit('order:status_changed', {
+    // 6. Emit real-time updates via Socket.io (both standardized names)
+    const statusPayload = {
       orderId,
       oldStatus: 'PLACED',
       newStatus: 'CONFIRMED',
       timestamp: now
-    });
+    };
+    io.emit('order:status_changed', statusPayload);
+    io.emit('order:status:changed', statusPayload);
 
     for (const alert of lowStockAlerts) {
       io.emit('inventory:low_stock', {
@@ -1147,12 +1164,16 @@ export function createApiRouter(io: SocketIOServer) {
 
     return res.json({
       success: true,
+      id: orderId,
       orderId,
       invoiceId,
       destinationCity,
       subtotal,
       gst,
-      total
+      total,
+      payment_status: paymentMethod === 'COD' ? 'PENDING' : 'PAID',
+      payment_method: paymentMethod || 'UPI',
+      status: 'CONFIRMED'
     });
   };
 
@@ -2047,11 +2068,8 @@ export function createApiRouter(io: SocketIOServer) {
       overview,
       kpis: {
         totalOrders: totals?.totalOrders || 0,
-        totalOrdersDelta: '+12% vs last month',
         totalRevenue: Math.round(totals?.totalRevenue || 0),
-        totalRevenueDelta: '+18.4% vs last month',
         totalCustomers: customersCount?.cnt || 0,
-        totalCustomersDelta: '+6 new this week',
         pendingPayments: pendingPayments?.cnt || 0,
         totalInventoryUnits: totalInventoryUnits?.total || 0,
         deliveredCount: deliveredCount?.cnt || 0,
@@ -2064,8 +2082,7 @@ export function createApiRouter(io: SocketIOServer) {
       warehouseMetrics: {
         totalSorts,
         sortSuccessRate,
-        avgSortTimeMs,
-        machineUptime: '99.8%'
+        avgSortTimeMs
       },
       pipelineAnalytics: {
         totalScans,
@@ -2218,6 +2235,11 @@ export function createApiRouter(io: SocketIOServer) {
     run("UPDATE orders SET payment_status = 'REFUNDED', status = 'CANCELLED' WHERE id = ?", [orderId]);
     transitionOrderStatus(orderId, 'CANCELLED', `Refund issued. Reason: ${reason || 'Admin processed refund'}`, io, true);
     return res.json({ success: true });
+  });
+
+  // Catch-all 404 handler for undefined API routes
+  router.all('*', (req: Request, res: Response) => {
+    return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}` });
   });
 
   return router;

@@ -7,6 +7,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { loadConfig, getConfig } from './src/server/config';
 import { getDb } from './src/server/db';
 import { createApiRouter } from './src/server/routes';
+import { verifyToken } from './src/server/auth';
 import {
   initHardwareSimulator,
   startConveyor,
@@ -46,9 +47,27 @@ async function startServer() {
   await getDb();
   console.log('[ParcelFlow] Database ready.');
 
-  // Initialize Socket.io
+  // Initialize Socket.io with authentication
   const io = new SocketIOServer(httpServer, {
     cors: { origin: corsOrigin || '*' }
+  });
+
+  // Socket.IO authentication middleware
+  io.use((socket, next) => {
+    const token = socket.handshake.auth?.token;
+    if (!token) {
+      // Allow unauthenticated connections for read-only real-time updates (order status, etc.)
+      // but they won't be able to use protected events
+      socket.data.user = null;
+      return next();
+    }
+    const verified = verifyToken(token);
+    if (!verified) {
+      socket.data.user = null;
+      return next();
+    }
+    socket.data.user = { id: verified.id, role: verified.role, name: verified.name };
+    next();
   });
 
   // Initialize hardware simulation engine
@@ -59,13 +78,28 @@ async function startServer() {
     checkDeviceWatchdog(io);
   }, 2500);
 
-  // Client socket handlers
+  // Client socket handlers — conveyor controls require staff role
   io.on('connection', (socket) => {
-    socket.on('conveyor:start', () => startConveyor());
-    socket.on('conveyor:stop', () => stopConveyor());
-    socket.on('conveyor:pause', () => pauseConveyor());
-    socket.on('conveyor:emergency_stop', () => emergencyStop());
+    const isStaff = socket.data.user && (socket.data.user.role === 'operator' || socket.data.user.role === 'admin');
+
+    socket.on('conveyor:start', () => {
+      if (!isStaff) return;
+      startConveyor();
+    });
+    socket.on('conveyor:stop', () => {
+      if (!isStaff) return;
+      stopConveyor();
+    });
+    socket.on('conveyor:pause', () => {
+      if (!isStaff) return;
+      pauseConveyor();
+    });
+    socket.on('conveyor:emergency_stop', () => {
+      if (!isStaff) return;
+      emergencyStop();
+    });
     socket.on('debug:simulate_fault', (data: { target: 'wifi' | 'sensor' | 'robot' | 'clear' }) => {
+      if (!isStaff) return;
       simulateFault(data.target);
     });
   });
@@ -82,6 +116,9 @@ async function startServer() {
 
   // API Routes
   app.use('/api', createApiRouter(io));
+
+  // Graphify Knowledge Graph output visualization
+  app.use('/graphify', express.static(path.join(process.cwd(), 'graphify-out')));
 
   // Catch-all for API routes to prevent fallback to SPA HTML
   app.all('/api/*', (req, res) => {

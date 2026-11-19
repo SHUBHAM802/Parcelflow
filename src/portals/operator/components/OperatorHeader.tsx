@@ -1,6 +1,7 @@
 import React from 'react';
 import { MachineState } from '../../../types';
 import { StatusDotPill } from '../../../shared/components/StatusDotPill';
+import { ParcelFlowLogo } from '../../../shared/components/ParcelFlowLogo';
 import { useAuth } from '../../../shared/store/authContext';
 import { Cpu, Wifi, Video, Activity, Bot, RefreshCw, LogOut } from 'lucide-react';
 
@@ -13,13 +14,12 @@ export const OperatorHeader: React.FC<OperatorHeaderProps> = ({ machineState, on
   const { user, logout } = useAuth();
 
   return (
-    <header className="sticky top-[37px] z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
+    <header className="sticky top-0 z-40 bg-zinc-900 border-b border-zinc-800 text-white px-4 sm:px-6 py-2.5 shadow-md">
       <div className="flex items-center justify-between gap-4 flex-wrap">
-        {/* Title */}
+        {/* Title & Brand */}
         <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-teal-600 text-white flex items-center justify-center font-bold text-sm shadow-xs">
-            WH
-          </div>
+          <ParcelFlowLogo variant="compact" size="md" theme="dark" />
+          <div className="h-6 w-px bg-zinc-800 hidden sm:block" />
           <div>
             <div className="text-sm font-bold tracking-tight flex items-center gap-2">
               <span>Warehouse Floor Control</span>
