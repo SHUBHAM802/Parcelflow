@@ -184,3 +184,38 @@ The following files in `graphify-out/` are generated artifacts and must not be e
 - `graphify-out/GRAPH_TREE.html`
 - `graphify-out/.graphify_labels.json`
 
+---
+
+## 11. Ponytail — Senior Developer Philosophy & Lean Execution
+
+ParcelFlow integrates **Ponytail** (`.agents/rules/ponytail.md` and `.agents/skills/`). Ponytail enforces senior developer discipline: solve the whole problem with the least new code, eliminating speculative bloat and over-engineering while never cutting safety.
+
+### Core Principles
+1. **The Best Code is Code Never Written:** Take the first option that fully works:
+   - Does it need to exist? Skip features, options, and speculative flexibility nobody asked for.
+   - Already in this codebase (helper, component, pattern)? Reuse it the way surrounding code does.
+   - Standard library or platform feature? Use it unless the project has its own convention.
+   - Installed dependency? Use it. Never add an npm package for a few lines.
+   - Can it be one line understood at a glance? Keep it to one line.
+   - Otherwise: minimum complete code that works.
+2. **Never Cut:**
+   - Validation at trust boundaries
+   - Error handling that prevents data loss
+   - Security and authentication checks
+   - Accessibility and responsive behavior
+   - Calibration and safety interlocks for real or simulated warehouse hardware
+   - Existing working features or user-requested requirements
+3. **Lazy Solution, Complete Execution:**
+   - Finish every part the task needs: update callers, tests, and documentation.
+   - Grep every caller before changing a function signature or return type.
+   - Leave non-trivial logic verified with a concise test.
+   - Mark intentional deferrals with: `shortcut: <the limit>, <when to upgrade>`.
+4. **Installed Ponytail Skills (`.agents/skills/`):**
+   - `ponytail` — Core lazy senior dev mode (smallest complete change, concise risk disclosure).
+   - `ponytail-review` — Quality review of changes/diffs (correctness, safety, scale, tests, lean).
+   - `ponytail-audit` — Whole-codebase quality and bloat audit.
+   - `ponytail-debt` — Collects and reports `shortcut:` comments as a tracked debt ledger.
+   - `ponytail-gain` — Benchmark-verified impact scoreboard.
+   - `ponytail-help` — Quick reference guide for Ponytail skills and commands.
+
+

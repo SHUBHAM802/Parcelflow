@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../../shared/store/authContext';
 import { Lock, Mail, User, Phone, ArrowRight, AlertCircle, Eye, EyeOff, ShieldAlert, KeyRound, CheckCircle } from 'lucide-react';
+import { ParcelFlowLogo } from '../../shared/components/ParcelFlowLogo';
 import { apiFetch } from '../../shared/lib/api';
 import { auth, googleProvider, isFirebaseConfigured } from '../../shared/lib/firebase';
 import { signInWithPopup } from 'firebase/auth';
@@ -260,14 +261,9 @@ export const LoginPage: React.FC = () => {
     <div className="min-h-screen bg-zinc-900 text-zinc-100 flex flex-col justify-center items-center p-4 sm:p-6 lg:p-8 selection:bg-orange-500/30 selection:text-orange-200">
       <div className="w-full max-w-md space-y-6">
         {/* Brand Header */}
-        <div className="text-center space-y-2">
-          <div className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-full bg-zinc-800/90 border border-zinc-700/80 text-xs text-zinc-300 shadow-xs mb-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-            <span className="font-semibold tracking-wider text-white">PARCELFLOW</span>
-            <span className="text-zinc-500">|</span>
-            <span className="text-zinc-400">Enterprise Unified Platform</span>
-          </div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white">
+        <div className="text-center space-y-3 flex flex-col items-center">
+          <ParcelFlowLogo variant="full" size="lg" theme="dark" />
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-white pt-1">
             {getHeaderTitle()}
           </h1>
           <p className="text-xs sm:text-sm text-zinc-400 max-w-sm mx-auto">

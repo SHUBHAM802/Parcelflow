@@ -72,9 +72,14 @@ export type OrderStatus =
   | 'PACKING'
   | 'PACKED'
   | 'ON_CONVEYOR'
+  | 'IR1_DETECTED'
+  | 'SCANNING'
+  | 'ROUTE_IDENTIFIED'
   | 'DETECTED'
+  | 'AT_PICK_POINT'
   | 'SORTING'
   | 'SORTED'
+  | 'DISPOSED'
   | 'DISPATCHED'
   | 'DELIVERED'
   | 'PAYMENT_FAILED'
@@ -276,9 +281,41 @@ export interface Bin {
   category_id: string | null;
   category_name?: string;
   is_overflow: number;
+  is_disposable_fallback?: number;
   servo_preset_json: string;
   is_active: number;
   parcel_count: number;
+  updated_at: string;
+}
+
+export interface RouteProfile {
+  id: string;
+  code: string;
+  name: string;
+  city: string;
+  target_bin_id: string;
+  target_bin_label?: string;
+  target_bin_number?: number;
+  is_disposable_fallback: number;
+  is_active: number;
+  qr_code_payload: string;
+  notes?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ServoJointCalibration {
+  id: string;
+  joint_index: number;
+  joint_name: string;
+  servo_model: 'MG996R' | 'MG90S';
+  pca_channel: number;
+  min_angle: number;
+  max_angle: number;
+  min_pulse_us: number;
+  max_pulse_us: number;
+  default_angle: number;
+  trim_offset: number;
   updated_at: string;
 }
 

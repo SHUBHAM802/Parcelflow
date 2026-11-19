@@ -33,7 +33,7 @@ import {
   resetEmergencyStop,
   getPipelineSnapshot
 } from './services/hardwareService';
-import { createOrGetLabel, recordLabelPrinted } from './services/labelService';
+import { createOrGetLabel, recordLabelPrinted, generateRouteQrPayload } from './services/labelService';
 import { processScan } from './services/scanService';
 import { createRemoteJWKSet, jwtVerify } from 'jose';
 import { Server as SocketIOServer } from 'socket.io';
@@ -344,13 +344,18 @@ export function createApiRouter(io: SocketIOServer) {
     );
 
     // In production, this token would be sent via email/SMS.
-    // For development/demo, we return it in the response.
-    return res.json({
+    // For development/demo, we return it in the response so testers can use it.
+    const cfg = getConfig();
+    const response: Record<string, any> = {
       success: true,
-      message: 'Password reset token generated. In production, this would be sent to your email.',
-      token,
-      email: cleanEmail
-    });
+      message: 'If an account with that email exists, a password reset token has been generated.'
+    };
+    if (cfg.NODE_ENV === 'development') {
+      response.message = 'Password reset token generated. In production, this would be sent to your email.';
+      response.token = token;
+      response.email = cleanEmail;
+    }
+    return res.json(response);
   });
 
   // Reset Password: Validate token and update password
@@ -1022,11 +1027,14 @@ export function createApiRouter(io: SocketIOServer) {
       });
     }
 
-    // 2. Lookup destination city from address
+    // 2. Lookup destination city from address (validate ownership)
     let destinationCity = 'Pune';
     if (addressId) {
-      const address = queryOne<{ city: string }>('SELECT city FROM addresses WHERE id = ?', [addressId]);
-      if (address && address.city) {
+      const address = queryOne<{ city: string; customer_id: string }>('SELECT city, customer_id FROM addresses WHERE id = ? AND customer_id = ?', [addressId, user.id]);
+      if (!address) {
+        return res.status(403).json({ error: 'Address not found or does not belong to this account' });
+      }
+      if (address.city) {
         destinationCity = address.city;
       }
     }
@@ -1057,12 +1065,16 @@ export function createApiRouter(io: SocketIOServer) {
     const lowStockAlerts: { productId: string; productName: string; remaining: number }[] = [];
 
     // 5. Execute transaction: Atomic creation and inventory decrement
+    const paymentStatus = paymentMethod === 'COD' ? 'PENDING' : 'PAID';
+    const paymentNote = paymentMethod === 'COD'
+      ? 'Cash on Delivery — payment collected upon delivery'
+      : `Demo ${paymentMethod} payment verified (simulated)`;
     try {
       transaction(() => {
         run(
           `INSERT INTO orders (id, customer_id, address_id, destination_city, status, payment_status, payment_method, subtotal, gst_amount, total_amount, created_at, updated_at)
-          VALUES (?, ?, ?, ?, 'CONFIRMED', 'PAID', ?, ?, ?, ?, ?, ?)`,
-          [orderId, user.id, addressId || null, destinationCity, paymentMethod || 'UPI', subtotal, gst, total, now, now]
+          VALUES (?, ?, ?, ?, 'CONFIRMED', ?, ?, ?, ?, ?, ?, ?)`,
+          [orderId, user.id, addressId || null, destinationCity, paymentStatus, paymentMethod || 'UPI', subtotal, gst, total, now, now]
         );
 
         for (const item of validatedItems) {
@@ -1105,17 +1117,20 @@ export function createApiRouter(io: SocketIOServer) {
           [`hist-${orderId}-1`, orderId, now]
         );
         run(
-          "INSERT INTO order_status_history (id, order_id, status, note, changed_at) VALUES (?, ?, 'CONFIRMED', 'Payment verified successfully', ?)",
-          [`hist-${orderId}-2`, orderId, now]
+          "INSERT INTO order_status_history (id, order_id, status, note, changed_at) VALUES (?, ?, 'CONFIRMED', ?, ?)",
+          [`hist-${orderId}-2`, orderId, paymentNote, now]
         );
 
         // Picking task
         run("INSERT INTO picking_tasks (id, order_id, status) VALUES (?, ?, 'PENDING')", [`pick-${orderId}`, orderId]);
 
         // Invoice record
-        run("INSERT INTO invoices (id, order_id, gstin, issued_at) VALUES (?, ?, '27AABCP1234F1Z9', ?)", [
+        // PLACEHOLDER GSTIN — replace with real GSTIN for production use
+        const PLACEHOLDER_GSTIN = '27AABCP1234F1Z9';
+        run("INSERT INTO invoices (id, order_id, gstin, issued_at) VALUES (?, ?, ?, ?)", [
           invoiceId,
           orderId,
+          PLACEHOLDER_GSTIN,
           now
         ]);
 
@@ -1129,13 +1144,15 @@ export function createApiRouter(io: SocketIOServer) {
       return res.status(500).json({ error: 'Order creation failed. Please try again.' });
     }
 
-    // 6. Emit real-time updates via Socket.io
-    io.emit('order:status_changed', {
+    // 6. Emit real-time updates via Socket.io (both standardized names)
+    const statusPayload = {
       orderId,
       oldStatus: 'PLACED',
       newStatus: 'CONFIRMED',
       timestamp: now
-    });
+    };
+    io.emit('order:status_changed', statusPayload);
+    io.emit('order:status:changed', statusPayload);
 
     for (const alert of lowStockAlerts) {
       io.emit('inventory:low_stock', {
@@ -1147,12 +1164,16 @@ export function createApiRouter(io: SocketIOServer) {
 
     return res.json({
       success: true,
+      id: orderId,
       orderId,
       invoiceId,
       destinationCity,
       subtotal,
       gst,
-      total
+      total,
+      payment_status: paymentMethod === 'COD' ? 'PENDING' : 'PAID',
+      payment_method: paymentMethod || 'UPI',
+      status: 'CONFIRMED'
     });
   };
 
@@ -1793,7 +1814,7 @@ export function createApiRouter(io: SocketIOServer) {
     return res.json(result);
   });
 
-  router.get(['/hardware/conveyor/desired', '/api/hardware/conveyor/desired'], requireDeviceToken, (_req: Request, res: Response) => {
+  router.get(['/hardware/conveyor/desired', '/api/hardware/conveyor/desired', '/hardware/conveyor/state', '/api/hardware/conveyor/state'], requireDeviceToken, (_req: Request, res: Response) => {
     const state = getDesiredConveyorState();
     return res.json(state);
   });
@@ -1825,6 +1846,132 @@ export function createApiRouter(io: SocketIOServer) {
     const { reason } = req.body;
     const result = failCommand(id, reason || 'Unknown device fault', io);
     return res.json(result);
+  });
+
+  // ==========================================
+  // ROUTE PROFILES (Admin Destination Management)
+  // ==========================================
+  router.get(['/admin/route-profiles', '/api/admin/route-profiles'], requireStaff, (_req: Request, res: Response) => {
+    const profiles = query(`
+      SELECT rp.*, b.bin_number, b.label as target_bin_label, b.is_disposable_fallback as bin_disposable
+      FROM qr_route_profiles rp
+      JOIN bins b ON rp.target_bin_id = b.id
+      ORDER BY rp.is_disposable_fallback ASC, b.bin_number ASC
+    `);
+    return res.json(profiles);
+  });
+
+  router.put(['/admin/route-profiles/:id', '/api/admin/route-profiles/:id'], requireAdmin, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { name, city, target_bin_id, is_active, notes } = req.body;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const existing = queryOne("SELECT id FROM qr_route_profiles WHERE id = ?", [id]);
+    if (!existing) return res.status(404).json({ error: 'Route profile not found' });
+
+    if (name !== undefined) run("UPDATE qr_route_profiles SET name = ?, updated_at = ? WHERE id = ?", [name, now, id]);
+    if (city !== undefined) run("UPDATE qr_route_profiles SET city = ?, updated_at = ? WHERE id = ?", [city, now, id]);
+    if (target_bin_id !== undefined) run("UPDATE qr_route_profiles SET target_bin_id = ?, updated_at = ? WHERE id = ?", [target_bin_id, now, id]);
+    if (is_active !== undefined) run("UPDATE qr_route_profiles SET is_active = ?, updated_at = ? WHERE id = ?", [is_active ? 1 : 0, now, id]);
+    if (notes !== undefined) run("UPDATE qr_route_profiles SET notes = ?, updated_at = ? WHERE id = ?", [notes, now, id]);
+
+    return res.json({ success: true });
+  });
+
+  router.post(['/admin/route-profiles', '/api/admin/route-profiles'], requireAdmin, (req: Request, res: Response) => {
+    const { code, name, city, target_bin_id, notes } = req.body;
+    if (!code || !name || !city || !target_bin_id) {
+      return res.status(400).json({ error: 'code, name, city, and target_bin_id are required' });
+    }
+
+    const cleanCode = code.trim().toUpperCase();
+    const existing = queryOne("SELECT id FROM qr_route_profiles WHERE UPPER(code) = ?", [cleanCode]);
+    if (existing) {
+      return res.status(409).json({ error: `Route profile with code ${cleanCode} already exists` });
+    }
+
+    const id = `prof-${cleanCode.toLowerCase()}-${Date.now().toString().slice(-4)}`;
+    const qrPayload = generateRouteQrPayload(cleanCode);
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    run(
+      `INSERT INTO qr_route_profiles (id, code, name, city, target_bin_id, is_disposable_fallback, is_active, qr_code_payload, notes, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?, ?, ?)`,
+      [id, cleanCode, name, city, target_bin_id, qrPayload, notes || null, now, now]
+    );
+
+    return res.status(201).json({ success: true, id, code: cleanCode, qrPayload });
+  });
+
+  router.get(['/admin/route-profiles/:id/qr', '/api/admin/route-profiles/:id/qr'], requireStaff, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const profile = queryOne<{ code: string; name: string; qr_code_payload: string }>(
+      "SELECT code, name, qr_code_payload FROM qr_route_profiles WHERE id = ? OR UPPER(code) = UPPER(?)",
+      [id, id]
+    );
+    if (!profile) return res.status(404).json({ error: 'Route profile not found' });
+    return res.json({
+      code: profile.code,
+      name: profile.name,
+      payload: profile.qr_code_payload
+    });
+  });
+
+  // ==========================================
+  // SERVO CALIBRATION (7-Joint PCA9685 Arm)
+  // ==========================================
+  router.get(['/admin/servo-calibration', '/api/admin/servo-calibration'], requireStaff, (_req: Request, res: Response) => {
+    const calibrations = query("SELECT * FROM servo_calibration ORDER BY joint_index ASC");
+    return res.json(calibrations);
+  });
+
+  router.put(['/admin/servo-calibration/:id', '/api/admin/servo-calibration/:id'], requireAdmin, (req: Request, res: Response) => {
+    const { id } = req.params;
+    const { min_angle, max_angle, min_pulse_us, max_pulse_us, default_angle, trim_offset } = req.body;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const existing = queryOne<{ id: string }>("SELECT id FROM servo_calibration WHERE id = ? OR joint_index = ?", [id, id]);
+    if (!existing) return res.status(404).json({ error: 'Joint calibration record not found' });
+
+    if (min_angle !== undefined) run("UPDATE servo_calibration SET min_angle = ?, updated_at = ? WHERE id = ?", [min_angle, now, existing.id]);
+    if (max_angle !== undefined) run("UPDATE servo_calibration SET max_angle = ?, updated_at = ? WHERE id = ?", [max_angle, now, existing.id]);
+    if (min_pulse_us !== undefined) run("UPDATE servo_calibration SET min_pulse_us = ?, updated_at = ? WHERE id = ?", [min_pulse_us, now, existing.id]);
+    if (max_pulse_us !== undefined) run("UPDATE servo_calibration SET max_pulse_us = ?, updated_at = ? WHERE id = ?", [max_pulse_us, now, existing.id]);
+    if (default_angle !== undefined) run("UPDATE servo_calibration SET default_angle = ?, updated_at = ? WHERE id = ?", [default_angle, now, existing.id]);
+    if (trim_offset !== undefined) run("UPDATE servo_calibration SET trim_offset = ?, updated_at = ? WHERE id = ?", [trim_offset, now, existing.id]);
+
+    return res.json({ success: true });
+  });
+
+  router.post(['/admin/servo-calibration/test-joint', '/api/admin/servo-calibration/test-joint'], requireAdmin, (req: Request, res: Response) => {
+    const { jointIndex, angle } = req.body;
+    if (jointIndex === undefined || angle === undefined) {
+      return res.status(400).json({ error: 'jointIndex and angle are required' });
+    }
+
+    const joint = queryOne<{ joint_name: string; pca_channel: number; min_angle: number; max_angle: number }>(
+      "SELECT * FROM servo_calibration WHERE joint_index = ?", [jointIndex]
+    );
+    if (!joint) return res.status(404).json({ error: `Joint index ${jointIndex} not found` });
+
+    const targetAngle = Math.max(joint.min_angle, Math.min(joint.max_angle, Number(angle)));
+    const cmdId = `test-joint-${jointIndex}-${Date.now()}`;
+    const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+    const payloadJson = JSON.stringify({
+      jointIndex,
+      jointName: joint.joint_name,
+      pcaChannel: joint.pca_channel,
+      targetAngle
+    });
+
+    run(
+      `INSERT INTO hardware_commands (id, device_id, type, payload_json, status, idempotency_key, created_at, updated_at)
+       VALUES (?, 'arm-esp32', 'TEST_JOINT', ?, 'RELEASED', ?, ?, ?)`,
+      [cmdId, payloadJson, `joint-cmd-${cmdId}`, now, now]
+    );
+
+    return res.json({ success: true, commandId: cmdId, jointIndex, pcaChannel: joint.pca_channel, targetAngle });
   });
 
   // ==========================================
@@ -2047,11 +2194,8 @@ export function createApiRouter(io: SocketIOServer) {
       overview,
       kpis: {
         totalOrders: totals?.totalOrders || 0,
-        totalOrdersDelta: '+12% vs last month',
         totalRevenue: Math.round(totals?.totalRevenue || 0),
-        totalRevenueDelta: '+18.4% vs last month',
         totalCustomers: customersCount?.cnt || 0,
-        totalCustomersDelta: '+6 new this week',
         pendingPayments: pendingPayments?.cnt || 0,
         totalInventoryUnits: totalInventoryUnits?.total || 0,
         deliveredCount: deliveredCount?.cnt || 0,
@@ -2064,8 +2208,7 @@ export function createApiRouter(io: SocketIOServer) {
       warehouseMetrics: {
         totalSorts,
         sortSuccessRate,
-        avgSortTimeMs,
-        machineUptime: '99.8%'
+        avgSortTimeMs
       },
       pipelineAnalytics: {
         totalScans,
@@ -2218,6 +2361,11 @@ export function createApiRouter(io: SocketIOServer) {
     run("UPDATE orders SET payment_status = 'REFUNDED', status = 'CANCELLED' WHERE id = ?", [orderId]);
     transitionOrderStatus(orderId, 'CANCELLED', `Refund issued. Reason: ${reason || 'Admin processed refund'}`, io, true);
     return res.json({ success: true });
+  });
+
+  // Catch-all 404 handler for undefined API routes
+  router.all('*', (req: Request, res: Response) => {
+    return res.status(404).json({ error: `API endpoint not found: ${req.method} ${req.originalUrl || req.url}` });
   });
 
   return router;

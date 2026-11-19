@@ -99,6 +99,18 @@ export function initHardwareSimulator(io: SocketIOServer) {
     if (!cmd) return;
 
     isArmBusy = true;
+
+    if (cmd.type === 'TEST_JOINT') {
+      try {
+        acknowledgeCommand(cmd.commandId, ioInstance);
+        await sleep(400);
+        completeCommand(cmd.commandId, 400, ioInstance);
+      } finally {
+        isArmBusy = false;
+      }
+      return;
+    }
+
     machineState.robot = 'BUSY';
     machineState.activeOrderId = cmd.orderId || null;
     machineState.activeOrderBin = cmd.bin?.label || null;

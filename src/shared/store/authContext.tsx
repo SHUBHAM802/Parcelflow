@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User, Role } from '../../types';
 import { apiFetch } from '../lib/api';
+import { reconnectSocket } from '../lib/socket';
 import { auth } from '../lib/firebase';
 import { signOut } from 'firebase/auth';
 
@@ -47,6 +48,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser(res.user);
       localStorage.setItem('parcelflow_user', JSON.stringify(res.user));
       localStorage.setItem('parcelflow_token', res.token);
+      reconnectSocket();
 
       // Land directly in the portal matching the user account's role
       const targetPath = res.user.role === 'customer' 
@@ -72,6 +74,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser(res.user);
       localStorage.setItem('parcelflow_user', JSON.stringify(res.user));
       localStorage.setItem('parcelflow_token', res.token);
+      reconnectSocket();
 
       window.history.replaceState(null, '', '/customer');
       return res.user;
@@ -102,6 +105,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       setUser(res.user);
       localStorage.setItem('parcelflow_user', JSON.stringify(res.user));
       localStorage.setItem('parcelflow_token', res.token);
+      reconnectSocket();
 
       // Redirect customer to /customer
       const targetPath = res.user.role === 'customer' 
@@ -128,6 +132,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     localStorage.removeItem('parcelflow_user');
     localStorage.removeItem('parcelflow_token');
     localStorage.removeItem('parcelflow_active_role');
+    reconnectSocket();
     window.history.replaceState(null, '', '/login');
   };
 
